@@ -95,6 +95,11 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState("");
   const [requestSaveStatus, setRequestSaveStatus] = useState<RequestSaveStatus>("idle");
   const [requestSaveMessage, setRequestSaveMessage] = useState("日付とメモは自動保存されます。");
+  const [shiftFetchStatus, setShiftFetchStatus] = useState<{
+    rowsCount: number | null;
+    source: string;
+    targetMonth: string;
+  }>({ rowsCount: null, source: "未取得", targetMonth });
   const canAdmin = !isSupabaseEnabled || authRole === "admin";
 
   const monthDates = useMemo(() => getMonthDates(targetMonth), [targetMonth]);
@@ -120,6 +125,7 @@ export default function Home() {
 
   const submittedStaffIds = new Set(monthRequests.map((request) => request.staffId));
   const stats = getShiftStats(assignments, staff);
+  const displayedAssignmentRowsCount = countAssignmentRows(assignments);
 
   const runSupabaseAction = useCallback(
     async (action: () => Promise<void>) => {
@@ -241,22 +247,40 @@ export default function Home() {
           }
           if (!token) throw new Error("ログイン情報を確認できません。再ログインしてください。");
 
+          console.log("[shift_assignments] GET /api/shifts/save request", {
+            source: "initial-load",
+            targetMonth,
+          });
           const response = await fetch(`/api/shifts/save?targetMonth=${encodeURIComponent(targetMonth)}`, {
             headers: { Authorization: `Bearer ${token}` },
           });
           const result = (await response.json()) as { assignments?: ShiftAssignment; error?: string; rowsCount?: number };
-          if (!response.ok) throw new Error(result.error ?? "シフト取得に失敗しました。");
-          loadedAssignments = uniqueAssignments(result.assignments ?? {});
-          console.log("[shift_assignments] initial fetch", {
-            assignmentsCount: countAssignmentRows(loadedAssignments),
-            rowsCount: result.rowsCount ?? countAssignmentRows(loadedAssignments),
+          console.log("[shift_assignments] GET /api/shifts/save response JSON", {
+            ok: response.ok,
+            result,
+            source: "initial-load",
+            status: response.status,
             targetMonth,
           });
+          if (!response.ok) throw new Error(result.error ?? "シフト取得に失敗しました。");
+          loadedAssignments = uniqueAssignments(result.assignments ?? {});
+          const fetchedRowsCount = result.rowsCount ?? countAssignmentRows(loadedAssignments);
+          console.log("[shift_assignments] initial fetch", {
+            assignmentsCount: countAssignmentRows(loadedAssignments),
+            rowsCount: fetchedRowsCount,
+            targetMonth,
+          });
+          setShiftFetchStatus({ rowsCount: fetchedRowsCount, source: "初期読み込み", targetMonth });
         }
         if (cancelled) return;
         setStaff(store.staff);
         setRequests(store.requests);
         setRequired(store.required);
+        console.log("[shift_assignments] setAssignments", {
+          displayedCount: countAssignmentRows(loadedAssignments),
+          source: "initial-load",
+          targetMonth,
+        });
         setAssignments(loadedAssignments);
         setActiveStaffId((current) => (store.staff.some((member) => member.id === current) ? current : (store.staff[0]?.id ?? "")));
         if (authRole === "staff" && store.staff.length === 0) {
@@ -359,6 +383,11 @@ export default function Home() {
           targetMonth,
         });
         const reloadedAssignments = await fetchSavedShiftAssignments();
+        console.log("[shift_assignments] setAssignments", {
+          displayedCount: countAssignmentRows(reloadedAssignments),
+          source: "auto-generate-refetch",
+          targetMonth,
+        });
         setAssignments(reloadedAssignments);
       } else {
         setAssignments(nextAssignments);
@@ -387,7 +416,13 @@ export default function Home() {
     });
     void runSupabaseAction(async () => {
       await saveShiftAssignments(uniqueAssignments(nextAssignments));
-      setAssignments(await fetchSavedShiftAssignments());
+      const reloadedAssignments = await fetchSavedShiftAssignments();
+      console.log("[shift_assignments] setAssignments", {
+        displayedCount: countAssignmentRows(reloadedAssignments),
+        source: "manual-toggle-refetch",
+        targetMonth,
+      });
+      setAssignments(reloadedAssignments);
     });
   }
 
@@ -410,7 +445,13 @@ export default function Home() {
     setDragStaffId(null);
     void runSupabaseAction(async () => {
       await saveShiftAssignments(uniqueAssignments(nextAssignments));
-      setAssignments(await fetchSavedShiftAssignments());
+      const reloadedAssignments = await fetchSavedShiftAssignments();
+      console.log("[shift_assignments] setAssignments", {
+        displayedCount: countAssignmentRows(reloadedAssignments),
+        source: "drag-refetch",
+        targetMonth,
+      });
+      setAssignments(reloadedAssignments);
     });
   }
 
@@ -536,20 +577,33 @@ export default function Home() {
     }
 
     const token = await getCurrentAccessToken();
+    console.log("[shift_assignments] GET /api/shifts/save request", {
+      source: "after-save",
+      targetMonth,
+    });
     const response = await fetch(`/api/shifts/save?targetMonth=${encodeURIComponent(targetMonth)}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const result = (await response.json()) as { assignments?: ShiftAssignment; error?: string; rowsCount?: number };
+    console.log("[shift_assignments] GET /api/shifts/save response JSON", {
+      ok: response.ok,
+      result,
+      source: "after-save",
+      status: response.status,
+      targetMonth,
+    });
     if (!response.ok) {
       throw new Error(result.error ?? "シフト取得に失敗しました。");
     }
 
     const fetchedAssignments = uniqueAssignments(result.assignments ?? {});
+    const fetchedRowsCount = result.rowsCount ?? countAssignmentRows(fetchedAssignments);
     console.log("[shift_assignments] refetch after save", {
       assignmentsCount: countAssignmentRows(fetchedAssignments),
-      rowsCount: result.rowsCount ?? countAssignmentRows(fetchedAssignments),
+      rowsCount: fetchedRowsCount,
       targetMonth,
     });
+    setShiftFetchStatus({ rowsCount: fetchedRowsCount, source: "保存後再取得", targetMonth });
     return fetchedAssignments;
   }
 
@@ -736,8 +790,14 @@ export default function Home() {
       </header>
 
       <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6">
+        {canAdmin ? (
+          <div className="rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-medium text-sky-950">
+            取得件数: {shiftFetchStatus.rowsCount ?? "-"}件 / 表示件数: {displayedAssignmentRowsCount}件 / 対象月度:{" "}
+            {shiftFetchStatus.targetMonth} / 取得元: {shiftFetchStatus.source}
+          </div>
+        ) : null}
         {!isSupabaseEnabled ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             Supabase環境変数が未設定のため、サンプルデータで動作しています。
           </div>
         ) : null}
