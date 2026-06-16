@@ -60,6 +60,10 @@ function uniqueAssignments(assignments: ShiftAssignment): ShiftAssignment {
   );
 }
 
+function countAssignmentRows(assignments: ShiftAssignment) {
+  return Object.values(assignments).reduce((sum, staffIds) => sum + staffIds.length, 0);
+}
+
 function getUserRole(user: User | null): UserRole {
   return user?.app_metadata?.role === "admin" ? "admin" : "staff";
 }
@@ -223,12 +227,37 @@ export default function Home() {
     }
 
     loadSupabaseStore(supabase, targetMonth, scope)
-      .then((store) => {
+      .then(async (store) => {
+        if (cancelled) return;
+        let loadedAssignments = store.assignments;
+        if (authRole === "admin") {
+          const { data, error } = await supabase.auth.getSession();
+          if (error) throw new Error(`ログイン情報を確認できません: ${error.message}`);
+          let token = data.session?.access_token;
+          if (!token) {
+            const refreshed = await supabase.auth.refreshSession();
+            if (refreshed.error) throw new Error(`ログイン情報を確認できません: ${refreshed.error.message}`);
+            token = refreshed.data.session?.access_token;
+          }
+          if (!token) throw new Error("ログイン情報を確認できません。再ログインしてください。");
+
+          const response = await fetch(`/api/shifts/save?targetMonth=${encodeURIComponent(targetMonth)}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const result = (await response.json()) as { assignments?: ShiftAssignment; error?: string; rowsCount?: number };
+          if (!response.ok) throw new Error(result.error ?? "シフト取得に失敗しました。");
+          loadedAssignments = uniqueAssignments(result.assignments ?? {});
+          console.log("[shift_assignments] initial fetch", {
+            assignmentsCount: countAssignmentRows(loadedAssignments),
+            rowsCount: result.rowsCount ?? countAssignmentRows(loadedAssignments),
+            targetMonth,
+          });
+        }
         if (cancelled) return;
         setStaff(store.staff);
         setRequests(store.requests);
         setRequired(store.required);
-        setAssignments(store.assignments);
+        setAssignments(loadedAssignments);
         setActiveStaffId((current) => (store.staff.some((member) => member.id === current) ? current : (store.staff[0]?.id ?? "")));
         if (authRole === "staff" && store.staff.length === 0) {
           setErrorMessage("ログイン中のメールアドレスに紐づくスタッフ情報がありません。管理者にスタッフ招待またはメール登録を依頼してください。");
@@ -323,9 +352,17 @@ export default function Home() {
       const nextAssignments = uniqueAssignments(result.assignments);
       if (supabase) {
         await upsertRequiredStaff(supabase, filledRequired);
-        await saveShiftAssignments(result.assignments);
+        const saveResult = await saveShiftAssignments(nextAssignments);
+        console.log("[shift_assignments] auto generate saved", {
+          rowsCount: saveResult.rowsCount,
+          savedCount: saveResult.savedCount,
+          targetMonth,
+        });
+        const reloadedAssignments = await fetchSavedShiftAssignments();
+        setAssignments(reloadedAssignments);
+      } else {
+        setAssignments(nextAssignments);
       }
-      setAssignments(nextAssignments);
       setAdminTab("shift");
     } catch (error) {
       setErrorMessage(`シフト保存に失敗しました: ${error instanceof Error ? error.message : "不明なエラー"}`);
@@ -348,7 +385,10 @@ export default function Home() {
       nextAssignments = uniqueAssignments({ ...current, [dateKey]: [...selected] });
       return nextAssignments;
     });
-    void runSupabaseAction(() => saveShiftAssignments(uniqueAssignments(nextAssignments)));
+    void runSupabaseAction(async () => {
+      await saveShiftAssignments(uniqueAssignments(nextAssignments));
+      setAssignments(await fetchSavedShiftAssignments());
+    });
   }
 
   function moveDraggedStaff(dateKey: string) {
@@ -368,7 +408,10 @@ export default function Home() {
       return next;
     });
     setDragStaffId(null);
-    void runSupabaseAction(() => saveShiftAssignments(uniqueAssignments(nextAssignments)));
+    void runSupabaseAction(async () => {
+      await saveShiftAssignments(uniqueAssignments(nextAssignments));
+      setAssignments(await fetchSavedShiftAssignments());
+    });
   }
 
   function updateStaff(staffId: string, patch: Partial<Staff>) {
@@ -487,13 +530,39 @@ export default function Home() {
     return token;
   }
 
-  async function saveShiftAssignments(nextAssignments: ShiftAssignment) {
+  async function fetchSavedShiftAssignments() {
     if (!supabase || !canAdmin) {
-      if (!supabase) return;
+      throw new Error("管理者のみシフトを取得できます。");
+    }
+
+    const token = await getCurrentAccessToken();
+    const response = await fetch(`/api/shifts/save?targetMonth=${encodeURIComponent(targetMonth)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const result = (await response.json()) as { assignments?: ShiftAssignment; error?: string; rowsCount?: number };
+    if (!response.ok) {
+      throw new Error(result.error ?? "シフト取得に失敗しました。");
+    }
+
+    const fetchedAssignments = uniqueAssignments(result.assignments ?? {});
+    console.log("[shift_assignments] refetch after save", {
+      assignmentsCount: countAssignmentRows(fetchedAssignments),
+      rowsCount: result.rowsCount ?? countAssignmentRows(fetchedAssignments),
+      targetMonth,
+    });
+    return fetchedAssignments;
+  }
+
+  async function saveShiftAssignments(nextAssignments: ShiftAssignment) {
+    if (!supabase) {
+      return { rowsCount: 0, savedCount: 0 };
+    }
+    if (!canAdmin) {
       throw new Error("管理者のみシフトを保存できます。");
     }
 
     const token = await getCurrentAccessToken();
+    const inputCount = countAssignmentRows(nextAssignments);
 
     const response = await fetch("/api/shifts/save", {
       method: "POST",
@@ -506,10 +575,17 @@ export default function Home() {
         targetMonth,
       }),
     });
-    const result = (await response.json()) as { error?: string };
+    const result = (await response.json()) as { error?: string; rowsCount?: number; savedCount?: number };
     if (!response.ok) {
       throw new Error(result.error ?? "シフト保存に失敗しました。");
     }
+    console.log("[shift_assignments] save response", {
+      inputCount,
+      rowsCount: result.rowsCount ?? 0,
+      savedCount: result.savedCount ?? 0,
+      targetMonth,
+    });
+    return { rowsCount: result.rowsCount ?? 0, savedCount: result.savedCount ?? 0 };
   }
 
   async function adminLogin() {
