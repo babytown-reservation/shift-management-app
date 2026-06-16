@@ -581,9 +581,6 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-[#f7f7f3] text-neutral-950">
-      <div className="bg-white px-4 py-5 text-center text-3xl font-black text-red-600">
-        ★★★ TEST FROM CODEX ★★★
-      </div>
       <div className="bg-rose-600 px-4 py-4 text-center text-2xl font-bold text-white">
         21日〜20日対応テスト表示
       </div>
@@ -762,9 +759,6 @@ function LoginScreen({
 
   return (
     <main className="flex min-h-screen flex-col bg-[#f7f7f3] text-neutral-950">
-      <div className="bg-white px-4 py-5 text-center text-3xl font-black text-red-600">
-        ★★★ TEST FROM CODEX ★★★
-      </div>
       <div className="bg-rose-600 px-4 py-4 text-center text-2xl font-bold text-white">
         21日〜20日対応テスト表示
       </div>
