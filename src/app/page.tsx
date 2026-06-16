@@ -95,6 +95,8 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState("");
   const [requestSaveStatus, setRequestSaveStatus] = useState<RequestSaveStatus>("idle");
   const [requestSaveMessage, setRequestSaveMessage] = useState("日付とメモは自動保存されます。");
+  const [shiftSaveStatus, setShiftSaveStatus] = useState<RequestSaveStatus>("idle");
+  const [shiftSaveMessage, setShiftSaveMessage] = useState("シフト編集は自動保存されます。");
   const [shiftFetchStatus, setShiftFetchStatus] = useState<{
     rowsCount: number | null;
     source: string;
@@ -376,19 +378,7 @@ export default function Home() {
       const nextAssignments = uniqueAssignments(result.assignments);
       if (supabase) {
         await upsertRequiredStaff(supabase, filledRequired);
-        const saveResult = await saveShiftAssignments(nextAssignments);
-        console.log("[shift_assignments] auto generate saved", {
-          rowsCount: saveResult.rowsCount,
-          savedCount: saveResult.savedCount,
-          targetMonth,
-        });
-        const reloadedAssignments = await fetchSavedShiftAssignments();
-        console.log("[shift_assignments] setAssignments", {
-          displayedCount: countAssignmentRows(reloadedAssignments),
-          source: "auto-generate-refetch",
-          targetMonth,
-        });
-        setAssignments(reloadedAssignments);
+        await saveAndReloadShiftAssignments(nextAssignments, "auto-generate");
       } else {
         setAssignments(nextAssignments);
       }
@@ -406,24 +396,18 @@ export default function Home() {
       setErrorMessage("管理者のみシフトを編集できます。");
       return;
     }
-    let nextAssignments: ShiftAssignment = {};
-    setAssignments((current) => {
-      const selected = new Set(current[dateKey] ?? []);
-      if (selected.has(staffId)) selected.delete(staffId);
-      else selected.add(staffId);
-      nextAssignments = uniqueAssignments({ ...current, [dateKey]: [...selected] });
-      return nextAssignments;
+    const selected = new Set(assignments[dateKey] ?? []);
+    if (selected.has(staffId)) selected.delete(staffId);
+    else selected.add(staffId);
+    const nextAssignments = uniqueAssignments({ ...assignments, [dateKey]: [...selected] });
+    console.log("[shift_assignments] manual edit nextAssignments", {
+      dateKey,
+      rowsCount: countAssignmentRows(nextAssignments),
+      staffIds: nextAssignments[dateKey] ?? [],
+      targetMonth,
     });
-    void runSupabaseAction(async () => {
-      await saveShiftAssignments(uniqueAssignments(nextAssignments));
-      const reloadedAssignments = await fetchSavedShiftAssignments();
-      console.log("[shift_assignments] setAssignments", {
-        displayedCount: countAssignmentRows(reloadedAssignments),
-        source: "manual-toggle-refetch",
-        targetMonth,
-      });
-      setAssignments(reloadedAssignments);
-    });
+    setAssignments(nextAssignments);
+    void saveAndReloadShiftAssignments(nextAssignments, "manual-toggle").catch(() => undefined);
   }
 
   function moveDraggedStaff(dateKey: string) {
@@ -432,27 +416,21 @@ export default function Home() {
       return;
     }
     if (!dragStaffId || isClosedDay(new Date(dateKey))) return;
-    let nextAssignments: ShiftAssignment = {};
-    setAssignments((current) => {
-      const next: ShiftAssignment = {};
-      for (const [key, ids] of Object.entries(current)) {
-        next[key] = ids.filter((id) => id !== dragStaffId);
-      }
-      next[dateKey] = [...(next[dateKey] ?? []), dragStaffId];
-      nextAssignments = uniqueAssignments(next);
-      return next;
+    const next: ShiftAssignment = {};
+    for (const [key, ids] of Object.entries(assignments)) {
+      next[key] = ids.filter((id) => id !== dragStaffId);
+    }
+    next[dateKey] = [...(next[dateKey] ?? []), dragStaffId];
+    const nextAssignments = uniqueAssignments(next);
+    console.log("[shift_assignments] drag edit nextAssignments", {
+      dateKey,
+      rowsCount: countAssignmentRows(nextAssignments),
+      staffIds: nextAssignments[dateKey] ?? [],
+      targetMonth,
     });
+    setAssignments(nextAssignments);
     setDragStaffId(null);
-    void runSupabaseAction(async () => {
-      await saveShiftAssignments(uniqueAssignments(nextAssignments));
-      const reloadedAssignments = await fetchSavedShiftAssignments();
-      console.log("[shift_assignments] setAssignments", {
-        displayedCount: countAssignmentRows(reloadedAssignments),
-        source: "drag-refetch",
-        targetMonth,
-      });
-      setAssignments(reloadedAssignments);
-    });
+    void saveAndReloadShiftAssignments(nextAssignments, "drag").catch(() => undefined);
   }
 
   function updateStaff(staffId: string, patch: Partial<Staff>) {
@@ -605,6 +583,47 @@ export default function Home() {
     });
     setShiftFetchStatus({ rowsCount: fetchedRowsCount, source: "保存後再取得", targetMonth });
     return fetchedAssignments;
+  }
+
+  async function saveAndReloadShiftAssignments(nextAssignments: ShiftAssignment, source: string) {
+    if (!supabase) {
+      setAssignments(nextAssignments);
+      setShiftSaveStatus("saved");
+      setShiftSaveMessage("保存しました");
+      return;
+    }
+
+    setIsSaving(true);
+    setErrorMessage("");
+    setShiftSaveStatus("saving");
+    setShiftSaveMessage("保存中...");
+
+    try {
+      const saveResult = await saveShiftAssignments(nextAssignments);
+      console.log("[shift_assignments] save completed", {
+        rowsCount: saveResult.rowsCount,
+        savedCount: saveResult.savedCount,
+        source,
+        targetMonth,
+      });
+      const reloadedAssignments = await fetchSavedShiftAssignments();
+      console.log("[shift_assignments] setAssignments", {
+        displayedCount: countAssignmentRows(reloadedAssignments),
+        source: `${source}-refetch`,
+        targetMonth,
+      });
+      setAssignments(reloadedAssignments);
+      setShiftSaveStatus("saved");
+      setShiftSaveMessage("保存しました");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "シフト保存に失敗しました。";
+      setErrorMessage(`シフト保存に失敗しました: ${message}`);
+      setShiftSaveStatus("error");
+      setShiftSaveMessage(`保存に失敗しました: ${message}`);
+      throw error;
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function saveShiftAssignments(nextAssignments: ShiftAssignment) {
@@ -858,6 +877,8 @@ export default function Home() {
           setBulkWeekdays={setBulkWeekdays}
           setDragStaffId={setDragStaffId}
           shiftIssues={shiftIssues}
+          shiftSaveMessage={shiftSaveMessage}
+          shiftSaveStatus={shiftSaveStatus}
           staff={staff}
           stats={stats}
           submittedStaffIds={submittedStaffIds}
@@ -1226,6 +1247,8 @@ function AdminView(props: {
   setBulkWeekdays: (weekdays: Weekday[]) => void;
   setDragStaffId: (id: string | null) => void;
   shiftIssues: Array<{ date: string; required: number; assigned: number }>;
+  shiftSaveMessage: string;
+  shiftSaveStatus: RequestSaveStatus;
   staff: Staff[];
   stats: Array<{ staffId: string; name: string; count: number }>;
   submittedStaffIds: Set<string>;
@@ -1524,6 +1547,8 @@ function ShiftEditor({
   required,
   setDragStaffId,
   shiftIssues,
+  shiftSaveMessage,
+  shiftSaveStatus,
   staff,
   stats,
   targetMonth,
@@ -1545,6 +1570,17 @@ function ShiftEditor({
           <Download size={16} />
           Excel出力
         </button>
+      </div>
+      <div
+        className={classNames(
+          "rounded-md border px-4 py-3 text-sm font-medium",
+          shiftSaveStatus === "saving" && "border-neutral-200 bg-white text-neutral-700",
+          shiftSaveStatus === "saved" && "border-teal-200 bg-teal-50 text-teal-800",
+          shiftSaveStatus === "error" && "border-rose-200 bg-rose-50 text-rose-900",
+          shiftSaveStatus === "idle" && "border-neutral-200 bg-neutral-50 text-neutral-600",
+        )}
+      >
+        {shiftSaveMessage}
       </div>
       <IssueList issues={shiftIssues} />
       <div className="rounded-lg border border-neutral-200 bg-white p-4 text-sm font-medium text-neutral-700">
