@@ -664,6 +664,7 @@ export default function Home() {
           assignments={assignments}
           canSwitchStaff={canAdmin}
           monthDates={monthDates}
+          targetPeriodLabel={targetPeriodLabel}
           requestSaveMessage={requestSaveMessage}
           requestSaveStatus={requestSaveStatus}
           requests={requests}
@@ -847,6 +848,7 @@ function StaffView({
   assignments,
   canSwitchStaff,
   monthDates,
+  targetPeriodLabel,
   requestSaveMessage,
   requestSaveStatus,
   requests,
@@ -860,6 +862,7 @@ function StaffView({
   assignments: ShiftAssignment;
   canSwitchStaff: boolean;
   monthDates: Date[];
+  targetPeriodLabel: string;
   requestSaveMessage: string;
   requestSaveStatus: RequestSaveStatus;
   requests: TimeOffRequest[];
@@ -911,6 +914,7 @@ function StaffView({
         <CalendarGrid
           assignments={assignments}
           monthDates={monthDates}
+          targetPeriodLabel={targetPeriodLabel}
           requests={ownRequests}
           staff={staff}
           activeStaffId={activeStaff?.id}
@@ -940,6 +944,7 @@ function CalendarGrid({
   activeStaffId,
   assignments,
   monthDates,
+  targetPeriodLabel,
   onDayClick,
   onMemoChange,
   requestSaveMessage,
@@ -949,6 +954,7 @@ function CalendarGrid({
   activeStaffId?: string;
   assignments: ShiftAssignment;
   monthDates: Date[];
+  targetPeriodLabel: string;
   requests: TimeOffRequest[];
   staff: Staff[];
   onDayClick: (dateKey: string) => void;
@@ -975,6 +981,7 @@ function CalendarGrid({
           {requestSaveMessage}
         </div>
       </div>
+      <p className="mb-3 text-sm font-medium text-neutral-700">対象期間：{targetPeriodLabel}</p>
       <div className="grid grid-cols-7 border-l border-t border-neutral-200 text-center text-xs font-medium text-neutral-600">
         {weekdayLabels.map((label) => (
           <div key={label} className="border-b border-r border-neutral-200 py-2">
@@ -1243,6 +1250,7 @@ function RequiredManager({
   required,
   setBulkValue,
   setBulkWeekdays,
+  targetPeriodLabel,
   updateRequiredForDate,
 }: Parameters<typeof AdminView>[0]) {
   return (
@@ -1268,6 +1276,9 @@ function RequiredManager({
         </div>
       </div>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="rounded-lg border border-neutral-200 bg-white p-3 text-sm font-medium text-neutral-700 sm:col-span-2 lg:col-span-5">
+          対象期間：{targetPeriodLabel}
+        </div>
         {monthDates.map((date) => {
           const key = toDateKey(date);
           const closed = isClosedDay(date);
@@ -1335,6 +1346,7 @@ function ShiftEditor({
   staff,
   stats,
   targetMonth,
+  targetPeriodLabel,
   toggleAssignment,
 }: Parameters<typeof AdminView>[0]) {
   return (
@@ -1354,6 +1366,9 @@ function ShiftEditor({
         </button>
       </div>
       <IssueList issues={shiftIssues} />
+      <div className="rounded-lg border border-neutral-200 bg-white p-4 text-sm font-medium text-neutral-700">
+        対象期間：{targetPeriodLabel}
+      </div>
       <div className="rounded-lg border border-neutral-200 bg-white p-4">
         <h2 className="text-lg font-semibold">スタッフ別勤務日数</h2>
         <div className="mt-3 flex flex-wrap gap-2">

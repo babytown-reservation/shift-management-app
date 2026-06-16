@@ -1,4 +1,4 @@
-import { getMonthDates, getWeekOfMonth, getWeekday, toDateKey } from "./date-utils";
+import { getMonthDates, getWeekOfShiftPeriod, getWeekday, toDateKey } from "./date-utils";
 import { isClosedDay } from "./holidays";
 import type { RequiredStaff, ShiftResult, Staff, TimeOffRequest } from "./types";
 
@@ -27,7 +27,7 @@ export function generateShift(
     }
 
     const weekday = getWeekday(date);
-    const week = getWeekOfMonth(date);
+    const week = getWeekOfShiftPeriod(date, targetMonth);
     const needed = required[dateKey] ?? 0;
     const eligible = staff
       .filter((member) => {

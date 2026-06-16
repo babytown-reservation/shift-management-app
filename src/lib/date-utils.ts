@@ -1,4 +1,4 @@
-import { addDays, format, getDay } from "date-fns";
+import { addDays, differenceInCalendarDays, format, getDay } from "date-fns";
 import type { Weekday } from "./types";
 
 export const weekdayLabels = ["日", "月", "火", "水", "木", "金", "土"] as const;
@@ -45,6 +45,11 @@ export function getMonthDates(targetMonth: string) {
 
 export function getWeekOfMonth(date: Date) {
   return Math.floor((date.getDate() - 1) / 7);
+}
+
+export function getWeekOfShiftPeriod(date: Date, targetMonth: string) {
+  const { start } = getShiftPeriodRange(targetMonth);
+  return Math.floor(differenceInCalendarDays(date, start) / 7);
 }
 
 export function getWeekday(date: Date): Weekday {
