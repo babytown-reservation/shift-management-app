@@ -86,26 +86,6 @@ function toAssignments(rows: AssignmentRow[]): ShiftAssignment {
   }, {});
 }
 
-function toUniqueAssignmentRows(assignments: ShiftAssignment) {
-  const seen = new Set<string>();
-  let inputCount = 0;
-  let duplicateCount = 0;
-  const rows = Object.entries(assignments).flatMap(([date, staffIds]) => {
-    return staffIds.flatMap((staffId) => {
-      inputCount += 1;
-      const key = `${date}:${staffId}`;
-      if (seen.has(key)) {
-        duplicateCount += 1;
-        return [];
-      }
-      seen.add(key);
-      return { date, staff_id: staffId };
-    });
-  });
-
-  return { duplicateCount, inputCount, rows };
-}
-
 function monthRange(targetMonth: string) {
   const [year, month] = targetMonth.split("-").map(Number);
   const start = `${targetMonth}-01`;
@@ -218,53 +198,4 @@ export async function upsertRequiredStaff(client: SupabaseClient, required: Requ
   if (rows.length === 0) return;
   const { error } = await client.from("required_staff").upsert(rows, { onConflict: "date" });
   assertResult(error);
-}
-
-export async function replaceMonthAssignments(client: SupabaseClient, targetMonth: string, assignments: ShiftAssignment) {
-  const { start, end } = monthRange(targetMonth);
-  const deleteResult = await client.from("shift_assignments").delete().gte("date", start).lte("date", end);
-  assertResult(deleteResult.error);
-
-  const afterDeleteResult = await client
-    .from("shift_assignments")
-    .select("date", { count: "exact", head: true })
-    .gte("date", start)
-    .lte("date", end);
-  assertResult(afterDeleteResult.error);
-
-  const remainingCount = afterDeleteResult.count ?? 0;
-  console.log("[shift_assignments] after delete", {
-    month: targetMonth,
-    remainingCount,
-  });
-
-  if (remainingCount > 0) {
-    throw new Error(`対象月の既存シフト削除が完了していません。残件数: ${remainingCount}`);
-  }
-
-  const { duplicateCount, inputCount, rows } = toUniqueAssignmentRows(assignments);
-  console.log("[shift_assignments] save rows", {
-    duplicateCount,
-    inputCount,
-    month: targetMonth,
-    rowsCount: rows.length,
-  });
-
-  if (rows.length === 0) return;
-
-  const { error } = await client.from("shift_assignments").insert(rows);
-  assertResult(error);
-
-  const afterInsertResult = await client
-    .from("shift_assignments")
-    .select("date", { count: "exact", head: true })
-    .gte("date", start)
-    .lte("date", end);
-  assertResult(afterInsertResult.error);
-
-  console.log("[shift_assignments] after insert", {
-    insertedRowsCount: rows.length,
-    month: targetMonth,
-    savedCount: afterInsertResult.count ?? 0,
-  });
 }

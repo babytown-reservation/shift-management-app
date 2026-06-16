@@ -25,7 +25,6 @@ import {
   deleteStaff as deleteSupabaseStaff,
   deleteTimeOffRequest,
   loadSupabaseStore,
-  replaceMonthAssignments,
   upsertRequiredStaff,
   upsertStaff,
   upsertTimeOffRequest,
@@ -309,7 +308,7 @@ export default function Home() {
       const nextAssignments = uniqueAssignments(result.assignments);
       if (supabase) {
         await upsertRequiredStaff(supabase, filledRequired);
-        await replaceMonthAssignments(supabase, targetMonth, nextAssignments);
+        await saveShiftAssignments(result.assignments);
       }
       setAssignments(nextAssignments);
       setAdminTab("shift");
@@ -334,7 +333,7 @@ export default function Home() {
       nextAssignments = uniqueAssignments({ ...current, [dateKey]: [...selected] });
       return nextAssignments;
     });
-    void runSupabaseAction(() => replaceMonthAssignments(supabase!, targetMonth, uniqueAssignments(nextAssignments)));
+    void runSupabaseAction(() => saveShiftAssignments(uniqueAssignments(nextAssignments)));
   }
 
   function moveDraggedStaff(dateKey: string) {
@@ -354,7 +353,7 @@ export default function Home() {
       return next;
     });
     setDragStaffId(null);
-    void runSupabaseAction(() => replaceMonthAssignments(supabase!, targetMonth, uniqueAssignments(nextAssignments)));
+    void runSupabaseAction(() => saveShiftAssignments(uniqueAssignments(nextAssignments)));
   }
 
   function updateStaff(staffId: string, patch: Partial<Staff>) {
@@ -448,6 +447,33 @@ export default function Home() {
       setErrorMessage(error instanceof Error ? error.message : "スタッフ招待に失敗しました。");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function saveShiftAssignments(nextAssignments: ShiftAssignment) {
+    if (!supabase || !canAdmin) {
+      if (!supabase) return;
+      throw new Error("管理者のみシフトを保存できます。");
+    }
+
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new Error("ログイン情報がありません。");
+
+    const response = await fetch("/api/shifts/save", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        assignments: nextAssignments,
+        targetMonth,
+      }),
+    });
+    const result = (await response.json()) as { error?: string };
+    if (!response.ok) {
+      throw new Error(result.error ?? "シフト保存に失敗しました。");
     }
   }
 
