@@ -225,6 +225,23 @@ export async function replaceMonthAssignments(client: SupabaseClient, targetMont
   const deleteResult = await client.from("shift_assignments").delete().gte("date", start).lte("date", end);
   assertResult(deleteResult.error);
 
+  const afterDeleteResult = await client
+    .from("shift_assignments")
+    .select("date", { count: "exact", head: true })
+    .gte("date", start)
+    .lte("date", end);
+  assertResult(afterDeleteResult.error);
+
+  const remainingCount = afterDeleteResult.count ?? 0;
+  console.log("[shift_assignments] after delete", {
+    month: targetMonth,
+    remainingCount,
+  });
+
+  if (remainingCount > 0) {
+    throw new Error(`対象月の既存シフト削除が完了していません。残件数: ${remainingCount}`);
+  }
+
   const { duplicateCount, inputCount, rows } = toUniqueAssignmentRows(assignments);
   console.log("[shift_assignments] save rows", {
     duplicateCount,
@@ -235,6 +252,19 @@ export async function replaceMonthAssignments(client: SupabaseClient, targetMont
 
   if (rows.length === 0) return;
 
-  const { error } = await client.from("shift_assignments").upsert(rows, { onConflict: "date,staff_id" });
+  const { error } = await client.from("shift_assignments").insert(rows);
   assertResult(error);
+
+  const afterInsertResult = await client
+    .from("shift_assignments")
+    .select("date", { count: "exact", head: true })
+    .gte("date", start)
+    .lte("date", end);
+  assertResult(afterInsertResult.error);
+
+  console.log("[shift_assignments] after insert", {
+    insertedRowsCount: rows.length,
+    month: targetMonth,
+    savedCount: afterInsertResult.count ?? 0,
+  });
 }
