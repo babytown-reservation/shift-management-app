@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { getShiftPeriodRange, toDateKey } from "./date-utils";
 import type { RequiredStaff, ShiftAssignment, Staff, TimeOffRequest, Weekday } from "./types";
 
 type StaffRow = {
@@ -87,10 +88,8 @@ function toAssignments(rows: AssignmentRow[]): ShiftAssignment {
 }
 
 function monthRange(targetMonth: string) {
-  const [year, month] = targetMonth.split("-").map(Number);
-  const start = `${targetMonth}-01`;
-  const end = new Date(year, month, 0).toISOString().slice(0, 10);
-  return { start, end };
+  const { end, start } = getShiftPeriodRange(targetMonth);
+  return { end: toDateKey(end), start: toDateKey(start) };
 }
 
 function assertResult(error: { message: string } | null) {

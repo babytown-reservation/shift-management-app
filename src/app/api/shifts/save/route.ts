@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { getShiftPeriodRange, toDateKey } from "@/lib/date-utils";
 import type { ShiftAssignment } from "@/lib/types";
 
 type SaveShiftPayload = {
@@ -17,10 +18,8 @@ function jsonError(message: string, status = 400) {
 }
 
 function monthRange(targetMonth: string) {
-  const [year, month] = targetMonth.split("-").map(Number);
-  const startDate = `${targetMonth}-01`;
-  const endDate = new Date(year, month, 0).toISOString().slice(0, 10);
-  return { endDate, startDate };
+  const { end, start } = getShiftPeriodRange(targetMonth);
+  return { endDate: toDateKey(end), startDate: toDateKey(start) };
 }
 
 function normalizeDate(value: string) {

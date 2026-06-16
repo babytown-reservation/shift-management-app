@@ -15,7 +15,16 @@ import {
   Users,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getMonthDates, getWeekday, monthKey, toDateKey, weekdayLabels } from "@/lib/date-utils";
+import {
+  getMonthDates,
+  getMonthDegreeLabel,
+  getShiftPeriodLabel,
+  getWeekday,
+  isDateInShiftPeriod,
+  monthKey,
+  toDateKey,
+  weekdayLabels,
+} from "@/lib/date-utils";
 import { downloadShiftWorkbook } from "@/lib/excel";
 import { getJapaneseHolidayName, isClosedDay } from "@/lib/holidays";
 import { defaultRequiredByWeekday, initialRequests, initialRequiredStaff, initialStaff } from "@/lib/sample-data";
@@ -85,8 +94,10 @@ export default function Home() {
   const canAdmin = !isSupabaseEnabled || authRole === "admin";
 
   const monthDates = useMemo(() => getMonthDates(targetMonth), [targetMonth]);
+  const targetPeriodLabel = useMemo(() => getShiftPeriodLabel(targetMonth), [targetMonth]);
+  const monthDegreeLabel = useMemo(() => getMonthDegreeLabel(targetMonth), [targetMonth]);
   const activeStaff = staff.find((member) => member.id === activeStaffId) ?? staff[0];
-  const monthRequests = requests.filter((request) => request.date.startsWith(targetMonth));
+  const monthRequests = requests.filter((request) => isDateInShiftPeriod(request.date, targetMonth));
   const shiftIssues = useMemo(() => {
     return monthDates
       .filter((date) => !isClosedDay(date))
@@ -571,6 +582,9 @@ export default function Home() {
           <div>
             <p className="text-sm font-medium text-teal-700">Next.js + Supabase + Vercel MVP</p>
             <h1 className="text-2xl font-semibold">シフト管理</h1>
+            <p className="mt-1 text-sm text-neutral-600">
+              {monthDegreeLabel} / 対象期間：{targetPeriodLabel}
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {isSupabaseEnabled && authUser ? (
@@ -578,8 +592,9 @@ export default function Home() {
                 {authRole === "admin" ? "管理者" : "スタッフ"}: {authUser.email}
               </span>
             ) : null}
+            <span className="text-sm font-medium text-neutral-700">月度</span>
             <input
-              aria-label="対象月"
+              aria-label="対象月度"
               className="h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
               type="month"
               value={targetMonth}
@@ -685,6 +700,7 @@ export default function Home() {
           stats={stats}
           submittedStaffIds={submittedStaffIds}
           targetMonth={targetMonth}
+          targetPeriodLabel={targetPeriodLabel}
           toggleAssignment={toggleAssignment}
           updateRequiredForDate={updateRequiredForDate}
           updateStaff={updateStaff}
@@ -853,7 +869,9 @@ function StaffView({
   toggleRequest: (dateKey: string) => void;
   updateMemo: (dateKey: string, memo: string) => void;
 }) {
-  const ownRequests = requests.filter((request) => request.staffId === activeStaff?.id && request.date.startsWith(targetMonth));
+  const ownRequests = requests.filter(
+    (request) => request.staffId === activeStaff?.id && isDateInShiftPeriod(request.date, targetMonth),
+  );
 
   return (
     <section className="mx-auto grid max-w-7xl gap-4 px-4 py-5 sm:px-6 lg:grid-cols-[280px_1fr]">
@@ -1033,6 +1051,7 @@ function AdminView(props: {
   stats: Array<{ staffId: string; name: string; count: number }>;
   submittedStaffIds: Set<string>;
   targetMonth: string;
+  targetPeriodLabel: string;
   toggleAssignment: (dateKey: string, staffId: string) => void;
   updateRequiredForDate: (dateKey: string, count: number) => void;
   updateStaff: (staffId: string, patch: Partial<Staff>) => void;
@@ -1078,15 +1097,20 @@ function Dashboard({
   staff,
   submittedStaffIds,
   targetMonth,
+  targetPeriodLabel,
 }: Parameters<typeof AdminView>[0]) {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-4">
         <Metric label="スタッフ人数" value={`${staff.length}人`} />
         <Metric label="希望休提出" value={`${submittedStaffIds.size}/${staff.length}`} />
-        <Metric label="対象月" value={targetMonth} />
+        <Metric label="対象月度" value={getMonthDegreeLabel(targetMonth)} />
         <Metric label="不足日" value={`${shiftIssues.length}日`} tone={shiftIssues.length ? "warn" : "ok"} />
       </div>
+      <section className="rounded-lg border border-neutral-200 bg-white p-4">
+        <h2 className="font-semibold">対象期間</h2>
+        <p className="mt-2 text-sm text-neutral-700">{targetPeriodLabel}</p>
+      </section>
       <div className="flex flex-wrap gap-2">
         <button
           className="inline-flex h-11 items-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"

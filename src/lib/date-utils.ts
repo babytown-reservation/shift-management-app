@@ -1,4 +1,4 @@
-import { addDays, endOfMonth, format, getDay, startOfMonth } from "date-fns";
+import { addDays, format, getDay } from "date-fns";
 import type { Weekday } from "./types";
 
 export const weekdayLabels = ["日", "月", "火", "水", "木", "金", "土"] as const;
@@ -11,10 +11,31 @@ export function monthKey(date: Date) {
   return format(date, "yyyy-MM");
 }
 
-export function getMonthDates(targetMonth: string) {
+export function getShiftPeriodRange(targetMonth: string) {
   const [year, month] = targetMonth.split("-").map(Number);
-  const start = startOfMonth(new Date(year, month - 1, 1));
-  const end = endOfMonth(start);
+  return {
+    end: new Date(year, month - 1, 20),
+    start: new Date(year, month - 2, 21),
+  };
+}
+
+export function getShiftPeriodLabel(targetMonth: string) {
+  const { end, start } = getShiftPeriodRange(targetMonth);
+  return `${format(start, "yyyy/M/d")}〜${format(end, "yyyy/M/d")}`;
+}
+
+export function getMonthDegreeLabel(targetMonth: string) {
+  const [year, month] = targetMonth.split("-").map(Number);
+  return `${year}年${month}月度`;
+}
+
+export function isDateInShiftPeriod(dateKey: string, targetMonth: string) {
+  const { end, start } = getShiftPeriodRange(targetMonth);
+  return dateKey >= toDateKey(start) && dateKey <= toDateKey(end);
+}
+
+export function getMonthDates(targetMonth: string) {
+  const { end, start } = getShiftPeriodRange(targetMonth);
   const dates: Date[] = [];
   for (let day = start; day <= end; day = addDays(day, 1)) {
     dates.push(day);

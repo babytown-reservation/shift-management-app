@@ -1,10 +1,11 @@
 import * as XLSX from "xlsx-js-style";
-import { getMonthDates, toDateKey, weekdayLabels } from "./date-utils";
+import { getMonthDates, getMonthDegreeLabel, getShiftPeriodLabel, toDateKey, weekdayLabels } from "./date-utils";
 import { getJapaneseHolidayName, isClosedDay } from "./holidays";
 import type { ShiftAssignment, Staff } from "./types";
 
 export function downloadShiftWorkbook(targetMonth: string, staff: Staff[], assignments: ShiftAssignment) {
   const dates = getMonthDates(targetMonth);
+  const monthDegreeLabel = getMonthDegreeLabel(targetMonth);
   const rows = [
     ["氏名", ...dates.map((date) => date.getDate()), "合計"],
     ["曜日", ...dates.map((date) => weekdayLabels[date.getDay()]), ""],
@@ -54,10 +55,10 @@ export function downloadShiftWorkbook(targetMonth: string, staff: Staff[], assig
   const noteRow = rows.length + 2;
   worksheet[XLSX.utils.encode_cell({ r: noteRow, c: 0 })] = {
     t: "s",
-    v: "土日祝は休業日: " + dates.map((date) => getJapaneseHolidayName(date)).filter(Boolean).join(" / "),
+    v: `対象期間: ${getShiftPeriodLabel(targetMonth)} / 土日祝は休業日: ` + dates.map((date) => getJapaneseHolidayName(date)).filter(Boolean).join(" / "),
   };
 
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, targetMonth);
-  XLSX.writeFile(workbook, `shift-${targetMonth}.xlsx`, { cellStyles: true });
+  XLSX.utils.book_append_sheet(workbook, worksheet, monthDegreeLabel);
+  XLSX.writeFile(workbook, `shift-${targetMonth}-degree.xlsx`, { cellStyles: true });
 }
