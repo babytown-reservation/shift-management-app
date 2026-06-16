@@ -9,6 +9,8 @@ type StaffRow = {
   name: string;
   note: string | null;
   workdays: number[];
+  min_days: number | null;
+  max_days: number | null;
   weekly_days: number;
   monthly_max: number;
 };
@@ -49,8 +51,8 @@ function toStaff(row: StaffRow): Staff {
     name: row.name,
     note: row.note ?? "",
     workdays: row.workdays as Weekday[],
-    weeklyDays: row.weekly_days,
-    monthlyMax: row.monthly_max,
+    weeklyDays: row.min_days ?? row.weekly_days,
+    monthlyMax: row.max_days ?? row.monthly_max,
   };
 }
 
@@ -62,6 +64,8 @@ function fromStaff(staff: Staff) {
     name: staff.name,
     note: staff.note,
     workdays: staff.workdays,
+    min_days: staff.weeklyDays,
+    max_days: staff.monthlyMax,
     weekly_days: staff.weeklyDays,
     monthly_max: staff.monthlyMax,
   };
@@ -98,7 +102,7 @@ function assertResult(error: { message: string } | null) {
 
 export async function loadSupabaseStore(client: SupabaseClient, targetMonth: string, scope: LoadScope): Promise<SupabaseStore> {
   const { start, end } = monthRange(targetMonth);
-  const staffSelect = "id,auth_user_id,email,name,note,workdays,weekly_days,monthly_max";
+  const staffSelect = "id,auth_user_id,email,name,note,workdays,min_days,max_days,weekly_days,monthly_max";
 
   if (scope.role === "staff") {
     const staffResult = await client
@@ -127,6 +131,10 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
 
     assertResult(requestsResult.error);
     assertResult(assignmentsResult.error);
+    console.log("[staff] load", {
+      rowsCount: staff.length,
+      scope: scope.role,
+    });
 
     return {
       staff,
@@ -152,6 +160,10 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
   assertResult(requestsResult.error);
   assertResult(requiredResult.error);
   assertResult(assignmentsResult.error);
+  console.log("[staff] load", {
+    rowsCount: staffResult.data?.length ?? 0,
+    scope: scope.role,
+  });
 
   return {
     staff: (staffResult.data ?? []).map((row) => toStaff(row as StaffRow)),
@@ -162,7 +174,14 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
 }
 
 export async function upsertStaff(client: SupabaseClient, staff: Staff) {
-  const { error } = await client.from("staff").upsert(fromStaff(staff));
+  const { error, count } = await client.from("staff").upsert(fromStaff(staff), { count: "exact" });
+  console.log("[staff] upsert", {
+    count,
+    id: staff.id,
+    monthlyMax: staff.monthlyMax,
+    weeklyDays: staff.weeklyDays,
+    workdays: staff.workdays,
+  });
   assertResult(error);
 }
 

@@ -11,6 +11,8 @@ function jsonError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
+const staffSelect = "id,auth_user_id,email,name,note,workdays,min_days,max_days,weekly_days,monthly_max";
+
 async function findUserIdByEmail(adminClient: SupabaseClient, email: string) {
   const { data, error } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 1000 });
   if (error) throw new Error(error.message);
@@ -69,17 +71,19 @@ export async function POST(request: Request) {
     };
 
     const staffResult = staffId
-      ? await adminClient.from("staff").update(staffPayload).eq("id", staffId).select("id,auth_user_id,email,name,note,workdays,weekly_days,monthly_max").single()
+      ? await adminClient.from("staff").update(staffPayload).eq("id", staffId).select(staffSelect).single()
       : await adminClient
           .from("staff")
           .insert({
             ...staffPayload,
             note: "",
             workdays: [1, 2, 3, 4, 5],
+            min_days: 3,
+            max_days: 14,
             weekly_days: 3,
             monthly_max: 14,
           })
-          .select("id,auth_user_id,email,name,note,workdays,weekly_days,monthly_max")
+          .select(staffSelect)
           .single();
 
     if (staffResult.error) throw new Error(staffResult.error.message);
@@ -93,8 +97,8 @@ export async function POST(request: Request) {
         name: staff.name,
         note: staff.note ?? "",
         workdays: staff.workdays,
-        weeklyDays: staff.weekly_days,
-        monthlyMax: staff.monthly_max,
+        weeklyDays: staff.min_days ?? staff.weekly_days,
+        monthlyMax: staff.max_days ?? staff.monthly_max,
       },
     });
   } catch (error) {

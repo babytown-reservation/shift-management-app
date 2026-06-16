@@ -5,6 +5,8 @@ create table if not exists public.staff (
   name text not null,
   note text default '',
   workdays int[] not null default '{1,2,3,4,5}',
+  min_days int not null default 5,
+  max_days int not null default 22,
   weekly_days int not null default 5,
   monthly_max int not null default 22,
   created_at timestamptz not null default now()
@@ -15,6 +17,18 @@ alter table public.staff
 
 alter table public.staff
   add column if not exists email text;
+
+alter table public.staff
+  add column if not exists min_days int not null default 5;
+
+alter table public.staff
+  add column if not exists max_days int not null default 22;
+
+alter table public.staff
+  add column if not exists weekly_days int not null default 5;
+
+alter table public.staff
+  add column if not exists monthly_max int not null default 22;
 
 create unique index if not exists staff_email_unique_idx
 on public.staff (lower(email))

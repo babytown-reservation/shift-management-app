@@ -95,6 +95,9 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState("");
   const [requestSaveStatus, setRequestSaveStatus] = useState<RequestSaveStatus>("idle");
   const [requestSaveMessage, setRequestSaveMessage] = useState("日付とメモは自動保存されます。");
+  const [staffSaveStatus, setStaffSaveStatus] = useState<RequestSaveStatus>("idle");
+  const [staffSaveMessage, setStaffSaveMessage] = useState("スタッフ編集は自動保存されます。");
+  const [staffFetchCount, setStaffFetchCount] = useState(initialStaff.length);
   const [shiftSaveStatus, setShiftSaveStatus] = useState<RequestSaveStatus>("idle");
   const [shiftSaveMessage, setShiftSaveMessage] = useState("シフト編集は自動保存されます。");
   const [shiftFetchStatus, setShiftFetchStatus] = useState<{
@@ -275,6 +278,11 @@ export default function Home() {
           setShiftFetchStatus({ rowsCount: fetchedRowsCount, source: "初期読み込み", targetMonth });
         }
         if (cancelled) return;
+        console.log("[staff] initial fetch", {
+          rowsCount: store.staff.length,
+          source: "initial-load",
+        });
+        setStaffFetchCount(store.staff.length);
         setStaff(store.staff);
         setRequests(store.requests);
         setRequired(store.required);
@@ -438,17 +446,50 @@ export default function Home() {
       setErrorMessage("管理者のみスタッフ情報を編集できます。");
       return;
     }
-    let nextStaff: Staff | null = null;
-    setStaff((current) =>
-      current.map((member) => {
-        if (member.id !== staffId) return member;
-        nextStaff = { ...member, ...patch };
-        return nextStaff;
-      }),
-    );
-    const staffToSave = nextStaff;
-    if (staffToSave) {
-      void runSupabaseAction(() => upsertStaff(supabase!, staffToSave));
+    const currentStaff = staff.find((member) => member.id === staffId);
+    if (!currentStaff) return;
+
+    const staffToSave = { ...currentStaff, ...patch };
+    console.log("[staff] edit nextStaff", {
+      id: staffToSave.id,
+      monthlyMax: staffToSave.monthlyMax,
+      name: staffToSave.name,
+      weeklyDays: staffToSave.weeklyDays,
+      workdays: staffToSave.workdays,
+    });
+    setStaff((current) => current.map((member) => (member.id === staffId ? staffToSave : member)));
+    void saveStaff(staffToSave);
+  }
+
+  async function saveStaff(staffToSave: Staff) {
+    if (!supabase) {
+      setStaffSaveStatus("saved");
+      setStaffSaveMessage("スタッフ保存済み");
+      return;
+    }
+
+    setIsSaving(true);
+    setErrorMessage("");
+    setStaffSaveStatus("saving");
+    setStaffSaveMessage("スタッフ保存中...");
+
+    try {
+      await upsertStaff(supabase, staffToSave);
+      console.log("[staff] saved", {
+        id: staffToSave.id,
+        monthlyMax: staffToSave.monthlyMax,
+        weeklyDays: staffToSave.weeklyDays,
+        workdays: staffToSave.workdays,
+      });
+      setStaffSaveStatus("saved");
+      setStaffSaveMessage("スタッフ保存済み");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "スタッフ保存に失敗しました。";
+      setStaffSaveStatus("error");
+      setStaffSaveMessage(`スタッフ保存失敗: ${message}`);
+      setErrorMessage(`スタッフ保存に失敗しました: ${message}`);
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -461,7 +502,7 @@ export default function Home() {
     const member = { id, authUserId: null, email: null, name: "新規スタッフ", note: "", workdays: [1, 2, 3, 4, 5] as Weekday[], weeklyDays: 3, monthlyMax: 14 };
     setStaff((current) => [...current, member]);
     setActiveStaffId(id);
-    void runSupabaseAction(() => upsertStaff(supabase!, member));
+    void saveStaff(member);
   }
 
   function deleteStaff(staffId: string) {
@@ -810,9 +851,22 @@ export default function Home() {
 
       <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6">
         {canAdmin ? (
-          <div className="rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-medium text-sky-950">
-            取得件数: {shiftFetchStatus.rowsCount ?? "-"}件 / 表示件数: {displayedAssignmentRowsCount}件 / 対象月度:{" "}
-            {shiftFetchStatus.targetMonth} / 取得元: {shiftFetchStatus.source}
+          <div className="space-y-2">
+            <div className="rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-medium text-sky-950">
+              取得件数: {shiftFetchStatus.rowsCount ?? "-"}件 / 表示件数: {displayedAssignmentRowsCount}件 / 対象月度:{" "}
+              {shiftFetchStatus.targetMonth} / 取得元: {shiftFetchStatus.source}
+            </div>
+            <div
+              className={classNames(
+                "rounded-md border px-4 py-3 text-sm font-medium",
+                staffSaveStatus === "saving" && "border-neutral-200 bg-white text-neutral-700",
+                staffSaveStatus === "saved" && "border-teal-200 bg-teal-50 text-teal-800",
+                staffSaveStatus === "error" && "border-rose-200 bg-rose-50 text-rose-900",
+                staffSaveStatus === "idle" && "border-neutral-200 bg-neutral-50 text-neutral-600",
+              )}
+            >
+              {staffSaveMessage} / スタッフ取得件数: {staffFetchCount}件
+            </div>
           </div>
         ) : null}
         {!isSupabaseEnabled ? (
