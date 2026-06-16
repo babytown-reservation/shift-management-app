@@ -95,6 +95,10 @@ export default function Home() {
 
   const monthDates = useMemo(() => getMonthDates(targetMonth), [targetMonth]);
   const targetPeriodLabel = useMemo(() => getShiftPeriodLabel(targetMonth), [targetMonth]);
+  const renderedDateRangeLabel = useMemo(() => {
+    if (!monthDates.length) return targetPeriodLabel;
+    return `${format(monthDates[0], "yyyy/M/d")}〜${format(monthDates[monthDates.length - 1], "yyyy/M/d")}`;
+  }, [monthDates, targetPeriodLabel]);
   const monthDegreeLabel = useMemo(() => getMonthDegreeLabel(targetMonth), [targetMonth]);
   const activeStaff = staff.find((member) => member.id === activeStaffId) ?? staff[0];
   const monthRequests = requests.filter((request) => isDateInShiftPeriod(request.date, targetMonth));
@@ -664,6 +668,7 @@ export default function Home() {
           assignments={assignments}
           canSwitchStaff={canAdmin}
           monthDates={monthDates}
+          renderedDateRangeLabel={renderedDateRangeLabel}
           targetPeriodLabel={targetPeriodLabel}
           requestSaveMessage={requestSaveMessage}
           requestSaveStatus={requestSaveStatus}
@@ -702,6 +707,7 @@ export default function Home() {
           submittedStaffIds={submittedStaffIds}
           targetMonth={targetMonth}
           targetPeriodLabel={targetPeriodLabel}
+          renderedDateRangeLabel={renderedDateRangeLabel}
           toggleAssignment={toggleAssignment}
           updateRequiredForDate={updateRequiredForDate}
           updateStaff={updateStaff}
@@ -848,6 +854,7 @@ function StaffView({
   assignments,
   canSwitchStaff,
   monthDates,
+  renderedDateRangeLabel,
   targetPeriodLabel,
   requestSaveMessage,
   requestSaveStatus,
@@ -862,6 +869,7 @@ function StaffView({
   assignments: ShiftAssignment;
   canSwitchStaff: boolean;
   monthDates: Date[];
+  renderedDateRangeLabel: string;
   targetPeriodLabel: string;
   requestSaveMessage: string;
   requestSaveStatus: RequestSaveStatus;
@@ -914,6 +922,7 @@ function StaffView({
         <CalendarGrid
           assignments={assignments}
           monthDates={monthDates}
+          renderedDateRangeLabel={renderedDateRangeLabel}
           targetPeriodLabel={targetPeriodLabel}
           requests={ownRequests}
           staff={staff}
@@ -925,6 +934,7 @@ function StaffView({
         />
         <section className="rounded-lg border border-neutral-200 bg-white p-4">
           <h2 className="text-lg font-semibold">確定シフト</h2>
+          <p className="mt-1 text-sm font-medium text-neutral-700">表示日付：{renderedDateRangeLabel}</p>
           <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {monthDates
               .filter((date) => assignments[toDateKey(date)]?.includes(activeStaff?.id ?? ""))
@@ -944,6 +954,7 @@ function CalendarGrid({
   activeStaffId,
   assignments,
   monthDates,
+  renderedDateRangeLabel,
   targetPeriodLabel,
   onDayClick,
   onMemoChange,
@@ -954,6 +965,7 @@ function CalendarGrid({
   activeStaffId?: string;
   assignments: ShiftAssignment;
   monthDates: Date[];
+  renderedDateRangeLabel: string;
   targetPeriodLabel: string;
   requests: TimeOffRequest[];
   staff: Staff[];
@@ -981,7 +993,10 @@ function CalendarGrid({
           {requestSaveMessage}
         </div>
       </div>
-      <p className="mb-3 text-sm font-medium text-neutral-700">対象期間：{targetPeriodLabel}</p>
+      <div className="mb-3 space-y-1 text-sm font-medium text-neutral-700">
+        <p>対象期間：{targetPeriodLabel}</p>
+        <p>表示日付：{renderedDateRangeLabel}</p>
+      </div>
       <div className="grid grid-cols-7 border-l border-t border-neutral-200 text-center text-xs font-medium text-neutral-600">
         {weekdayLabels.map((label) => (
           <div key={label} className="border-b border-r border-neutral-200 py-2">
@@ -1048,6 +1063,7 @@ function AdminView(props: {
   monthDates: Date[];
   monthRequests: TimeOffRequest[];
   moveDraggedStaff: (dateKey: string) => void;
+  renderedDateRangeLabel: string;
   required: RequiredStaff;
   setActiveTab: (tab: AdminTab) => void;
   setBulkValue: (value: number) => void;
@@ -1100,6 +1116,7 @@ function AdminView(props: {
 function Dashboard({
   createShift,
   isGeneratingShift,
+  renderedDateRangeLabel,
   shiftIssues,
   staff,
   submittedStaffIds,
@@ -1117,6 +1134,7 @@ function Dashboard({
       <section className="rounded-lg border border-neutral-200 bg-white p-4">
         <h2 className="font-semibold">対象期間</h2>
         <p className="mt-2 text-sm text-neutral-700">{targetPeriodLabel}</p>
+        <p className="mt-1 text-sm font-medium text-neutral-700">表示日付：{renderedDateRangeLabel}</p>
       </section>
       <div className="flex flex-wrap gap-2">
         <button
@@ -1247,6 +1265,7 @@ function RequiredManager({
   bulkValue,
   bulkWeekdays,
   monthDates,
+  renderedDateRangeLabel,
   required,
   setBulkValue,
   setBulkWeekdays,
@@ -1277,7 +1296,8 @@ function RequiredManager({
       </div>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
         <div className="rounded-lg border border-neutral-200 bg-white p-3 text-sm font-medium text-neutral-700 sm:col-span-2 lg:col-span-5">
-          対象期間：{targetPeriodLabel}
+          <p>対象期間：{targetPeriodLabel}</p>
+          <p className="mt-1">表示日付：{renderedDateRangeLabel}</p>
         </div>
         {monthDates.map((date) => {
           const key = toDateKey(date);
@@ -1303,10 +1323,14 @@ function RequiredManager({
   );
 }
 
-function RequestManager({ monthRequests, staff }: Parameters<typeof AdminView>[0]) {
+function RequestManager({ monthRequests, renderedDateRangeLabel, staff, targetPeriodLabel }: Parameters<typeof AdminView>[0]) {
   return (
     <section className="rounded-lg border border-neutral-200 bg-white p-4">
       <h2 className="text-lg font-semibold">希望休一覧</h2>
+      <div className="mt-2 text-sm font-medium text-neutral-700">
+        <p>対象期間：{targetPeriodLabel}</p>
+        <p className="mt-1">表示日付：{renderedDateRangeLabel}</p>
+      </div>
       <div className="mt-3 overflow-x-auto">
         <table className="w-full min-w-[560px] border-collapse text-sm">
           <thead>
@@ -1340,6 +1364,7 @@ function ShiftEditor({
   isGeneratingShift,
   monthDates,
   moveDraggedStaff,
+  renderedDateRangeLabel,
   required,
   setDragStaffId,
   shiftIssues,
@@ -1367,7 +1392,8 @@ function ShiftEditor({
       </div>
       <IssueList issues={shiftIssues} />
       <div className="rounded-lg border border-neutral-200 bg-white p-4 text-sm font-medium text-neutral-700">
-        対象期間：{targetPeriodLabel}
+        <p>対象期間：{targetPeriodLabel}</p>
+        <p className="mt-1">表示日付：{renderedDateRangeLabel}</p>
       </div>
       <div className="rounded-lg border border-neutral-200 bg-white p-4">
         <h2 className="text-lg font-semibold">スタッフ別勤務日数</h2>
