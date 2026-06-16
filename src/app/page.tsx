@@ -433,9 +433,7 @@ export default function Home() {
     setIsSaving(true);
     setErrorMessage("");
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) throw new Error("ログイン情報がありません。");
+      const token = await getCurrentAccessToken();
 
       const response = await fetch("/api/staff/invite", {
         method: "POST",
@@ -465,15 +463,37 @@ export default function Home() {
     }
   }
 
+  async function getCurrentAccessToken() {
+    if (!supabase) throw new Error("Supabaseが未設定です。");
+
+    const { data, error } = await supabase.auth.getSession();
+    if (error) {
+      throw new Error(`ログイン情報を確認できません: ${error.message}`);
+    }
+
+    let token = data.session?.access_token;
+    if (!token) {
+      const refreshed = await supabase.auth.refreshSession();
+      if (refreshed.error) {
+        throw new Error(`ログイン情報を確認できません: ${refreshed.error.message}`);
+      }
+      token = refreshed.data.session?.access_token;
+    }
+
+    if (!token) {
+      throw new Error("ログイン情報を確認できません。再ログインしてください。");
+    }
+
+    return token;
+  }
+
   async function saveShiftAssignments(nextAssignments: ShiftAssignment) {
     if (!supabase || !canAdmin) {
       if (!supabase) return;
       throw new Error("管理者のみシフトを保存できます。");
     }
 
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) throw new Error("ログイン情報がありません。");
+    const token = await getCurrentAccessToken();
 
     const response = await fetch("/api/shifts/save", {
       method: "POST",

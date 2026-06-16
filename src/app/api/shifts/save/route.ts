@@ -62,6 +62,12 @@ function buildRows(assignments: ShiftAssignment) {
   };
 }
 
+function getBearerToken(request: Request) {
+  const authorization = request.headers.get("authorization") ?? "";
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() ?? "";
+}
+
 export async function POST(request: Request) {
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -72,12 +78,11 @@ export async function POST(request: Request) {
       return jsonError("Supabaseのサーバー環境変数が未設定です。", 500);
     }
 
-    const authorization = request.headers.get("authorization");
-    const token = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
-    if (!token) return jsonError("ログイン情報がありません。", 401);
+    const token = getBearerToken(request);
+    if (!token) return jsonError("ログイン情報を確認できません。", 401);
 
     const userClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { autoRefreshToken: false, persistSession: false },
     });
     const { data: userData, error: userError } = await userClient.auth.getUser(token);
     if (userError || !userData.user) return jsonError("ログイン情報を確認できません。", 401);
