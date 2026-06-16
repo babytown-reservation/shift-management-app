@@ -47,7 +47,9 @@ function classNames(...values: Array<string | false | null | undefined>) {
 }
 
 function uniqueAssignments(assignments: ShiftAssignment): ShiftAssignment {
-  return Object.fromEntries(Object.entries(assignments).map(([date, staffIds]) => [date, [...new Set(staffIds)]]));
+  return Object.fromEntries(
+    Object.entries(assignments).map(([date, staffIds]) => [date, [...new Set(staffIds)]]),
+  );
 }
 
 function getUserRole(user: User | null): UserRole {
@@ -329,10 +331,10 @@ export default function Home() {
       const selected = new Set(current[dateKey] ?? []);
       if (selected.has(staffId)) selected.delete(staffId);
       else selected.add(staffId);
-      nextAssignments = { ...current, [dateKey]: [...selected] };
+      nextAssignments = uniqueAssignments({ ...current, [dateKey]: [...selected] });
       return nextAssignments;
     });
-    void runSupabaseAction(() => replaceMonthAssignments(supabase!, targetMonth, nextAssignments));
+    void runSupabaseAction(() => replaceMonthAssignments(supabase!, targetMonth, uniqueAssignments(nextAssignments)));
   }
 
   function moveDraggedStaff(dateKey: string) {
@@ -347,12 +349,12 @@ export default function Home() {
       for (const [key, ids] of Object.entries(current)) {
         next[key] = ids.filter((id) => id !== dragStaffId);
       }
-      next[dateKey] = [...new Set([...(next[dateKey] ?? []), dragStaffId])];
-      nextAssignments = next;
+      next[dateKey] = [...(next[dateKey] ?? []), dragStaffId];
+      nextAssignments = uniqueAssignments(next);
       return next;
     });
     setDragStaffId(null);
-    void runSupabaseAction(() => replaceMonthAssignments(supabase!, targetMonth, nextAssignments));
+    void runSupabaseAction(() => replaceMonthAssignments(supabase!, targetMonth, uniqueAssignments(nextAssignments)));
   }
 
   function updateStaff(staffId: string, patch: Partial<Staff>) {

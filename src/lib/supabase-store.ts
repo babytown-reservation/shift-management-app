@@ -88,14 +88,22 @@ function toAssignments(rows: AssignmentRow[]): ShiftAssignment {
 
 function toUniqueAssignmentRows(assignments: ShiftAssignment) {
   const seen = new Set<string>();
-  return Object.entries(assignments).flatMap(([date, staffIds]) => {
-    return [...new Set(staffIds)].flatMap((staffId) => {
+  let inputCount = 0;
+  let duplicateCount = 0;
+  const rows = Object.entries(assignments).flatMap(([date, staffIds]) => {
+    return staffIds.flatMap((staffId) => {
+      inputCount += 1;
       const key = `${date}:${staffId}`;
-      if (seen.has(key)) return [];
+      if (seen.has(key)) {
+        duplicateCount += 1;
+        return [];
+      }
       seen.add(key);
       return { date, staff_id: staffId };
     });
   });
+
+  return { duplicateCount, inputCount, rows };
 }
 
 function monthRange(targetMonth: string) {
@@ -217,9 +225,16 @@ export async function replaceMonthAssignments(client: SupabaseClient, targetMont
   const deleteResult = await client.from("shift_assignments").delete().gte("date", start).lte("date", end);
   assertResult(deleteResult.error);
 
-  const rows = toUniqueAssignmentRows(assignments);
+  const { duplicateCount, inputCount, rows } = toUniqueAssignmentRows(assignments);
+  console.log("[shift_assignments] save rows", {
+    duplicateCount,
+    inputCount,
+    month: targetMonth,
+    rowsCount: rows.length,
+  });
+
   if (rows.length === 0) return;
 
-  const { error } = await client.from("shift_assignments").insert(rows);
+  const { error } = await client.from("shift_assignments").upsert(rows, { onConflict: "date,staff_id" });
   assertResult(error);
 }
