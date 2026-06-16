@@ -581,6 +581,9 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-[#f7f7f3] text-neutral-950">
+      <div className="bg-rose-600 px-4 py-4 text-center text-2xl font-bold text-white">
+        21日〜20日対応テスト表示
+      </div>
       <header className="border-b border-neutral-200 bg-white">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div>
@@ -755,9 +758,12 @@ function LoginScreen({
   const isStaffLogin = loginMode === "staff";
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f7f7f3] px-4 text-neutral-950">
+    <main className="flex min-h-screen flex-col bg-[#f7f7f3] text-neutral-950">
+      <div className="bg-rose-600 px-4 py-4 text-center text-2xl font-bold text-white">
+        21日〜20日対応テスト表示
+      </div>
       <form
-        className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-6"
+        className="mx-auto my-auto w-full max-w-md rounded-lg border border-neutral-200 bg-white p-6"
         onSubmit={(event) => {
           event.preventDefault();
           if (isStaffLogin) onSendStaffMagicLink();
