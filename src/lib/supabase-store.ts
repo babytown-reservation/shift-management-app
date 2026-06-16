@@ -38,7 +38,7 @@ export type SupabaseStore = {
 
 export type LoadScope =
   | { role: "admin" }
-  | { role: "staff"; userId: string };
+  | { role: "staff"; userId: string; email?: string };
 
 function toStaff(row: StaffRow): Staff {
   return {
@@ -81,9 +81,21 @@ function toRequired(rows: RequiredRow[]): RequiredStaff {
 
 function toAssignments(rows: AssignmentRow[]): ShiftAssignment {
   return rows.reduce<ShiftAssignment>((acc, row) => {
-    acc[row.date] = [...(acc[row.date] ?? []), row.staff_id];
+    acc[row.date] = [...new Set([...(acc[row.date] ?? []), row.staff_id])];
     return acc;
   }, {});
+}
+
+function toUniqueAssignmentRows(assignments: ShiftAssignment) {
+  const seen = new Set<string>();
+  return Object.entries(assignments).flatMap(([date, staffIds]) => {
+    return [...new Set(staffIds)].flatMap((staffId) => {
+      const key = `${date}:${staffId}`;
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return { date, staff_id: staffId };
+    });
+  });
 }
 
 function monthRange(targetMonth: string) {
@@ -105,7 +117,7 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
     const staffResult = await client
       .from("staff")
       .select(staffSelect)
-      .eq("auth_user_id", scope.userId)
+      .limit(1)
       .maybeSingle();
     assertResult(staffResult.error);
 
@@ -205,12 +217,7 @@ export async function replaceMonthAssignments(client: SupabaseClient, targetMont
   const deleteResult = await client.from("shift_assignments").delete().gte("date", start).lte("date", end);
   assertResult(deleteResult.error);
 
-  const rows = Object.entries(assignments).flatMap(([date, staffIds]) =>
-    staffIds.map((staffId) => ({
-      date,
-      staff_id: staffId,
-    })),
-  );
+  const rows = toUniqueAssignmentRows(assignments);
   if (rows.length === 0) return;
 
   const { error } = await client.from("shift_assignments").insert(rows);

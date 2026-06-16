@@ -36,6 +36,7 @@ const weekdays: Weekday[] = [1, 2, 3, 4, 5];
 const tabs = ["dashboard", "staff", "required", "requests", "shift"] as const;
 type AdminTab = (typeof tabs)[number];
 type UserRole = "admin" | "staff";
+type RequestSaveStatus = "idle" | "saving" | "saved" | "error";
 
 function getDefaultRequired(date: Date) {
   return isClosedDay(date) ? 0 : defaultRequiredByWeekday[getWeekday(date)] ?? 0;
@@ -43,6 +44,10 @@ function getDefaultRequired(date: Date) {
 
 function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
+}
+
+function uniqueAssignments(assignments: ShiftAssignment): ShiftAssignment {
+  return Object.fromEntries(Object.entries(assignments).map(([date, staffIds]) => [date, [...new Set(staffIds)]]));
 }
 
 function getUserRole(user: User | null): UserRole {
@@ -55,8 +60,10 @@ export default function Home() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authRole, setAuthRole] = useState<UserRole>("staff");
   const [isAuthReady, setIsAuthReady] = useState(!supabase);
+  const [loginMode, setLoginMode] = useState<UserRole>("staff");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
+  const [loginNotice, setLoginNotice] = useState("");
   const [mode, setMode] = useState<"staff" | "admin">("staff");
   const [adminTab, setAdminTab] = useState<AdminTab>("dashboard");
   const [targetMonth, setTargetMonth] = useState(monthKey(new Date()));
@@ -70,7 +77,10 @@ export default function Home() {
   const [bulkWeekdays, setBulkWeekdays] = useState<Weekday[]>([1, 2, 3, 4, 5]);
   const [isLoading, setIsLoading] = useState(Boolean(supabase));
   const [isSaving, setIsSaving] = useState(false);
+  const [isGeneratingShift, setIsGeneratingShift] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [requestSaveStatus, setRequestSaveStatus] = useState<RequestSaveStatus>("idle");
+  const [requestSaveMessage, setRequestSaveMessage] = useState("日付とメモは自動保存されます。");
   const canAdmin = !isSupabaseEnabled || authRole === "admin";
 
   const monthDates = useMemo(() => getMonthDates(targetMonth), [targetMonth]);
@@ -102,6 +112,30 @@ export default function Home() {
         setErrorMessage(error instanceof Error ? error.message : "Supabaseへの保存に失敗しました。");
       } finally {
         setIsSaving(false);
+      }
+    },
+    [supabase],
+  );
+
+  const runRequestSaveAction = useCallback(
+    async (action: () => Promise<void>) => {
+      setRequestSaveStatus("saving");
+      setRequestSaveMessage("保存中...");
+      if (!supabase) {
+        setRequestSaveStatus("saved");
+        setRequestSaveMessage("保存しました");
+        return;
+      }
+
+      try {
+        await action();
+        setRequestSaveStatus("saved");
+        setRequestSaveMessage("保存しました");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "希望休の保存に失敗しました。";
+        setRequestSaveStatus("error");
+        setRequestSaveMessage(message);
+        setErrorMessage(message);
       }
     },
     [supabase],
@@ -167,7 +201,7 @@ export default function Home() {
       setErrorMessage("");
     });
 
-    const scope = authRole === "admin" ? { role: "admin" as const } : { role: "staff" as const, userId: authUser.id };
+    const scope = authRole === "admin" ? { role: "admin" as const } : { role: "staff" as const, userId: authUser.id, email: authUser.email };
     if (authRole === "staff") {
       queueMicrotask(() => setMode("staff"));
     }
@@ -181,7 +215,7 @@ export default function Home() {
         setAssignments(store.assignments);
         setActiveStaffId((current) => (store.staff.some((member) => member.id === current) ? current : (store.staff[0]?.id ?? "")));
         if (authRole === "staff" && store.staff.length === 0) {
-          setErrorMessage("ログイン中のユーザーに紐づくスタッフ情報がありません。管理者に staff.auth_user_id の設定を依頼してください。");
+          setErrorMessage("ログイン中のメールアドレスに紐づくスタッフ情報がありません。管理者にスタッフ招待またはメール登録を依頼してください。");
         }
       })
       .catch((error) => {
@@ -206,7 +240,7 @@ export default function Home() {
     const exists = requests.find((request) => request.staffId === activeStaff.id && request.date === dateKey);
     if (exists) {
       setRequests((current) => current.filter((request) => request !== exists));
-      void runSupabaseAction(() => deleteTimeOffRequest(supabase!, activeStaff.id, dateKey));
+      void runRequestSaveAction(() => deleteTimeOffRequest(supabase!, activeStaff.id, dateKey));
       return;
     }
     const request = { staffId: activeStaff.id, date: dateKey, memo: "", submittedAt: new Date().toISOString() };
@@ -214,7 +248,7 @@ export default function Home() {
       ...current,
       request,
     ]);
-    void runSupabaseAction(() => upsertTimeOffRequest(supabase!, request));
+    void runRequestSaveAction(() => upsertTimeOffRequest(supabase!, request));
   }
 
   function updateMemo(dateKey: string, memo: string) {
@@ -230,7 +264,7 @@ export default function Home() {
       ),
     );
     if (nextRequest) {
-      void runSupabaseAction(() => upsertTimeOffRequest(supabase!, { ...nextRequest, memo }));
+      void runRequestSaveAction(() => upsertTimeOffRequest(supabase!, { ...nextRequest, memo }));
     }
   }
 
@@ -252,22 +286,37 @@ export default function Home() {
     void runSupabaseAction(() => upsertRequiredStaff(supabase!, nextRequired));
   }
 
-  function createShift() {
+  async function createShift() {
     if (!canAdmin) {
       setErrorMessage("管理者のみシフトを自動作成できます。");
       return;
     }
+    if (isGeneratingShift) return;
+
+    setIsGeneratingShift(true);
+    setIsSaving(true);
+    setErrorMessage("");
+
     const filledRequired = monthDates.reduce<RequiredStaff>((acc, date) => {
       acc[toDateKey(date)] = required[toDateKey(date)] ?? getDefaultRequired(date);
       return acc;
     }, {});
-    const result = generateShift(targetMonth, staff, monthRequests, filledRequired);
-    setAssignments(result.assignments);
-    setAdminTab("shift");
-    void runSupabaseAction(async () => {
-      await upsertRequiredStaff(supabase!, filledRequired);
-      await replaceMonthAssignments(supabase!, targetMonth, result.assignments);
-    });
+
+    try {
+      const result = generateShift(targetMonth, staff, monthRequests, filledRequired);
+      const nextAssignments = uniqueAssignments(result.assignments);
+      if (supabase) {
+        await upsertRequiredStaff(supabase, filledRequired);
+        await replaceMonthAssignments(supabase, targetMonth, nextAssignments);
+      }
+      setAssignments(nextAssignments);
+      setAdminTab("shift");
+    } catch (error) {
+      setErrorMessage(`シフト保存に失敗しました: ${error instanceof Error ? error.message : "不明なエラー"}`);
+    } finally {
+      setIsSaving(false);
+      setIsGeneratingShift(false);
+    }
   }
 
   function toggleAssignment(dateKey: string, staffId: string) {
@@ -400,16 +449,55 @@ export default function Home() {
     }
   }
 
-  async function login() {
+  async function adminLogin() {
     if (!supabase) return;
     setIsSaving(true);
     setErrorMessage("");
+    setLoginNotice("");
     const { error } = await supabase.auth.signInWithPassword({
       email: loginEmail,
       password: loginPassword,
     });
     if (error) {
       setErrorMessage(error.message);
+    }
+    setIsSaving(false);
+  }
+
+  async function sendStaffMagicLink() {
+    setIsSaving(true);
+    setErrorMessage("");
+    setLoginNotice("");
+    try {
+      const response = await fetch("/api/auth/staff-magic-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: loginEmail }),
+      });
+      const result = (await response.json()) as { ok?: boolean; error?: string };
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error ?? "ログインリンクを送信できませんでした。");
+      }
+      setLoginNotice("ログインリンクを送信しました。メール内のリンクを開くとログインできます。");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "ログインリンクを送信できませんでした。");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function resetAdminPassword() {
+    if (!supabase) return;
+    setIsSaving(true);
+    setErrorMessage("");
+    setLoginNotice("");
+    const { error } = await supabase.auth.resetPasswordForEmail(loginEmail, {
+      redirectTo: window.location.origin,
+    });
+    if (error) {
+      setErrorMessage(error.message);
+    } else {
+      setLoginNotice("管理者用のパスワード再設定メールを送信しました。");
     }
     setIsSaving(false);
   }
@@ -435,9 +523,14 @@ export default function Home() {
         email={loginEmail}
         errorMessage={errorMessage}
         isSaving={isSaving}
+        loginMode={loginMode}
+        notice={loginNotice}
         onEmailChange={setLoginEmail}
-        onLogin={login}
+        onAdminLogin={adminLogin}
         onPasswordChange={setLoginPassword}
+        onResetAdminPassword={resetAdminPassword}
+        onSendStaffMagicLink={sendStaffMagicLink}
+        onModeChange={setLoginMode}
         password={loginPassword}
       />
     );
@@ -528,6 +621,8 @@ export default function Home() {
           assignments={assignments}
           canSwitchStaff={canAdmin}
           monthDates={monthDates}
+          requestSaveMessage={requestSaveMessage}
+          requestSaveStatus={requestSaveStatus}
           requests={requests}
           setActiveStaffId={setActiveStaffId}
           staff={staff}
@@ -547,6 +642,7 @@ export default function Home() {
           deleteStaff={deleteStaff}
           dragStaffId={dragStaffId}
           inviteStaff={inviteStaff}
+          isGeneratingShift={isGeneratingShift}
           isLoading={isLoading}
           monthDates={monthDates}
           monthRequests={monthRequests}
@@ -582,30 +678,65 @@ function LoginScreen({
   email,
   errorMessage,
   isSaving,
+  loginMode,
+  notice,
+  onAdminLogin,
   onEmailChange,
-  onLogin,
+  onModeChange,
   onPasswordChange,
+  onResetAdminPassword,
+  onSendStaffMagicLink,
   password,
 }: {
   email: string;
   errorMessage: string;
   isSaving: boolean;
+  loginMode: UserRole;
+  notice: string;
+  onAdminLogin: () => void;
   onEmailChange: (value: string) => void;
-  onLogin: () => void;
+  onModeChange: (value: UserRole) => void;
   onPasswordChange: (value: string) => void;
+  onResetAdminPassword: () => void;
+  onSendStaffMagicLink: () => void;
   password: string;
 }) {
+  const isStaffLogin = loginMode === "staff";
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#f7f7f3] px-4 text-neutral-950">
       <form
         className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-6"
         onSubmit={(event) => {
           event.preventDefault();
-          onLogin();
+          if (isStaffLogin) onSendStaffMagicLink();
+          else onAdminLogin();
         }}
       >
         <p className="text-sm font-medium text-teal-700">Supabase Auth</p>
         <h1 className="mt-1 text-2xl font-semibold">シフト管理ログイン</h1>
+        <div className="mt-5 grid grid-cols-2 gap-2 rounded-md bg-neutral-100 p-1">
+          <button
+            className={classNames(
+              "h-10 rounded px-3 text-sm font-medium",
+              isStaffLogin ? "bg-white text-neutral-950 shadow-sm" : "text-neutral-600",
+            )}
+            onClick={() => onModeChange("staff")}
+            type="button"
+          >
+            スタッフ
+          </button>
+          <button
+            className={classNames(
+              "h-10 rounded px-3 text-sm font-medium",
+              !isStaffLogin ? "bg-white text-neutral-950 shadow-sm" : "text-neutral-600",
+            )}
+            onClick={() => onModeChange("admin")}
+            type="button"
+          >
+            管理者
+          </button>
+        </div>
         <div className="mt-5 space-y-3">
           <label className="block text-sm font-medium">
             メールアドレス
@@ -617,17 +748,28 @@ function LoginScreen({
               value={email}
             />
           </label>
-          <label className="block text-sm font-medium">
-            パスワード
-            <input
-              autoComplete="current-password"
-              className="mt-1 h-11 w-full rounded-md border border-neutral-300 px-3"
-              onChange={(event) => onPasswordChange(event.target.value)}
-              type="password"
-              value={password}
-            />
-          </label>
+          {isStaffLogin ? (
+            <div className="rounded-md bg-teal-50 px-3 py-2 text-sm text-teal-900">
+              スタッフはメールアドレスだけでログインできます。届いたメール内のリンクを開いてください。
+            </div>
+          ) : (
+            <label className="block text-sm font-medium">
+              パスワード
+              <input
+                autoComplete="current-password"
+                className="mt-1 h-11 w-full rounded-md border border-neutral-300 px-3"
+                onChange={(event) => onPasswordChange(event.target.value)}
+                type="password"
+                value={password}
+              />
+            </label>
+          )}
         </div>
+        {notice ? (
+          <div className="mt-4 rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-900">
+            {notice}
+          </div>
+        ) : null}
         {errorMessage ? (
           <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900">
             {errorMessage}
@@ -639,8 +781,18 @@ function LoginScreen({
           type="submit"
         >
           <LogIn size={16} />
-          {isSaving ? "ログイン中" : "ログイン"}
+          {isSaving ? "送信中" : isStaffLogin ? "ログインリンクを送信" : "管理者ログイン"}
         </button>
+        {!isStaffLogin ? (
+          <button
+            className="mt-3 h-10 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm font-medium text-neutral-700 disabled:opacity-60"
+            disabled={isSaving || !email}
+            onClick={onResetAdminPassword}
+            type="button"
+          >
+            管理者パスワード再設定メールを送信
+          </button>
+        ) : null}
       </form>
     </main>
   );
@@ -651,6 +803,8 @@ function StaffView({
   assignments,
   canSwitchStaff,
   monthDates,
+  requestSaveMessage,
+  requestSaveStatus,
   requests,
   setActiveStaffId,
   staff,
@@ -662,6 +816,8 @@ function StaffView({
   assignments: ShiftAssignment;
   canSwitchStaff: boolean;
   monthDates: Date[];
+  requestSaveMessage: string;
+  requestSaveStatus: RequestSaveStatus;
   requests: TimeOffRequest[];
   setActiveStaffId: (id: string) => void;
   staff: Staff[];
@@ -688,7 +844,20 @@ function StaffView({
           ))}
         </select>
         <div className="mt-4 rounded-md bg-teal-50 p-3 text-sm text-teal-900">
-          希望休は締切前ならタップで追加・解除できます。メモは選択後に入力できます。
+          日付をタップすると自動保存されます。もう一度タップすると解除されます。
+          <br />
+          メモも入力すると自動保存されます。
+        </div>
+        <div
+          className={classNames(
+            "mt-3 rounded-md border px-3 py-2 text-sm",
+            requestSaveStatus === "saving" && "border-neutral-200 bg-white text-neutral-700",
+            requestSaveStatus === "saved" && "border-teal-200 bg-teal-50 text-teal-800",
+            requestSaveStatus === "error" && "border-rose-200 bg-rose-50 text-rose-900",
+            requestSaveStatus === "idle" && "border-neutral-200 bg-neutral-50 text-neutral-600",
+          )}
+        >
+          {requestSaveMessage}
         </div>
       </aside>
 
@@ -701,6 +870,8 @@ function StaffView({
           activeStaffId={activeStaff?.id}
           onDayClick={toggleRequest}
           onMemoChange={updateMemo}
+          requestSaveMessage={requestSaveMessage}
+          requestSaveStatus={requestSaveStatus}
         />
         <section className="rounded-lg border border-neutral-200 bg-white p-4">
           <h2 className="text-lg font-semibold">確定シフト</h2>
@@ -725,6 +896,8 @@ function CalendarGrid({
   monthDates,
   onDayClick,
   onMemoChange,
+  requestSaveMessage,
+  requestSaveStatus,
   requests,
 }: {
   activeStaffId?: string;
@@ -734,12 +907,27 @@ function CalendarGrid({
   staff: Staff[];
   onDayClick: (dateKey: string) => void;
   onMemoChange: (dateKey: string, memo: string) => void;
+  requestSaveMessage: string;
+  requestSaveStatus: RequestSaveStatus;
 }) {
   return (
     <section className="rounded-lg border border-neutral-200 bg-white p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <CalendarDays size={20} />
-        <h2 className="text-lg font-semibold">希望休カレンダー</h2>
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2">
+          <CalendarDays size={20} />
+          <h2 className="text-lg font-semibold">希望休カレンダー</h2>
+        </div>
+        <div
+          className={classNames(
+            "rounded-md border px-3 py-1.5 text-sm",
+            requestSaveStatus === "saving" && "border-neutral-200 bg-neutral-50 text-neutral-700",
+            requestSaveStatus === "saved" && "border-teal-200 bg-teal-50 text-teal-800",
+            requestSaveStatus === "error" && "border-rose-200 bg-rose-50 text-rose-900",
+            requestSaveStatus === "idle" && "border-neutral-200 bg-neutral-50 text-neutral-600",
+          )}
+        >
+          {requestSaveMessage}
+        </div>
       </div>
       <div className="grid grid-cols-7 border-l border-t border-neutral-200 text-center text-xs font-medium text-neutral-600">
         {weekdayLabels.map((label) => (
@@ -779,7 +967,7 @@ function CalendarGrid({
                   className="mt-2 h-8 w-full rounded border border-rose-200 bg-white px-2 text-xs text-neutral-900"
                   onClick={(event) => event.stopPropagation()}
                   onChange={(event) => onMemoChange(key, event.target.value)}
-                  placeholder="メモ"
+                  placeholder="メモ（自動保存）"
                   value={request.memo}
                 />
               ) : null}
@@ -802,6 +990,7 @@ function AdminView(props: {
   deleteStaff: (staffId: string) => void;
   dragStaffId: string | null;
   inviteStaff: (name: string, email: string, staffId?: string) => void;
+  isGeneratingShift: boolean;
   isLoading: boolean;
   monthDates: Date[];
   monthRequests: TimeOffRequest[];
@@ -856,6 +1045,7 @@ function AdminView(props: {
 
 function Dashboard({
   createShift,
+  isGeneratingShift,
   shiftIssues,
   staff,
   submittedStaffIds,
@@ -870,9 +1060,13 @@ function Dashboard({
         <Metric label="不足日" value={`${shiftIssues.length}日`} tone={shiftIssues.length ? "warn" : "ok"} />
       </div>
       <div className="flex flex-wrap gap-2">
-        <button className="inline-flex h-11 items-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-semibold text-white" onClick={createShift}>
+        <button
+          className="inline-flex h-11 items-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={isGeneratingShift}
+          onClick={createShift}
+        >
           <Sparkles size={17} />
-          自動作成
+          {isGeneratingShift ? "自動作成中..." : "自動作成"}
         </button>
       </div>
       <IssueList issues={shiftIssues} />
@@ -1080,6 +1274,7 @@ function ShiftEditor({
   assignments,
   createShift,
   dragStaffId,
+  isGeneratingShift,
   monthDates,
   moveDraggedStaff,
   required,
@@ -1093,9 +1288,13 @@ function ShiftEditor({
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap gap-2">
-        <button className="inline-flex h-10 items-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-medium text-white" onClick={createShift}>
+        <button
+          className="inline-flex h-10 items-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={isGeneratingShift}
+          onClick={createShift}
+        >
           <Sparkles size={16} />
-          自動作成
+          {isGeneratingShift ? "自動作成中..." : "自動作成"}
         </button>
         <button className="inline-flex h-10 items-center gap-2 rounded-md bg-neutral-950 px-3 text-sm font-medium text-white" onClick={() => downloadShiftWorkbook(targetMonth, staff, assignments)}>
           <Download size={16} />
