@@ -86,6 +86,7 @@ export default function Home() {
   const [requests, setRequests] = useState<TimeOffRequest[]>(initialRequests);
   const [required, setRequired] = useState<RequiredStaff>(initialRequiredStaff);
   const [assignments, setAssignments] = useState<ShiftAssignment>({});
+  const [savingAssignmentDates, setSavingAssignmentDates] = useState<string[]>([]);
   const [dragStaffId, setDragStaffId] = useState<string | null>(null);
   const [bulkValue, setBulkValue] = useState(3);
   const [bulkWeekdays, setBulkWeekdays] = useState<Weekday[]>([1, 2, 3, 4, 5]);
@@ -404,6 +405,8 @@ export default function Home() {
       setErrorMessage("管理者のみシフトを編集できます。");
       return;
     }
+    if (savingAssignmentDates.includes(dateKey)) return;
+    const previousAssignments = assignments;
     const selected = new Set(assignments[dateKey] ?? []);
     if (selected.has(staffId)) selected.delete(staffId);
     else selected.add(staffId);
@@ -415,7 +418,7 @@ export default function Home() {
       targetMonth,
     });
     setAssignments(nextAssignments);
-    void saveAndReloadShiftAssignments(nextAssignments, "manual-toggle").catch(() => undefined);
+    void saveOptimisticShiftAssignments(nextAssignments, previousAssignments, dateKey, "manual-toggle");
   }
 
   function moveDraggedStaff(dateKey: string) {
@@ -423,7 +426,8 @@ export default function Home() {
       setErrorMessage("管理者のみシフトを編集できます。");
       return;
     }
-    if (!dragStaffId || isClosedDay(new Date(dateKey))) return;
+    if (!dragStaffId || isClosedDay(new Date(dateKey)) || savingAssignmentDates.includes(dateKey)) return;
+    const previousAssignments = assignments;
     const next: ShiftAssignment = {};
     for (const [key, ids] of Object.entries(assignments)) {
       next[key] = ids.filter((id) => id !== dragStaffId);
@@ -438,7 +442,7 @@ export default function Home() {
     });
     setAssignments(nextAssignments);
     setDragStaffId(null);
-    void saveAndReloadShiftAssignments(nextAssignments, "drag").catch(() => undefined);
+    void saveOptimisticShiftAssignments(nextAssignments, previousAssignments, dateKey, "drag");
   }
 
   function updateStaff(staffId: string, patch: Partial<Staff>) {
@@ -663,6 +667,47 @@ export default function Home() {
       setShiftSaveMessage(`保存に失敗しました: ${message}`);
       throw error;
     } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function saveOptimisticShiftAssignments(
+    nextAssignments: ShiftAssignment,
+    previousAssignments: ShiftAssignment,
+    dateKey: string,
+    source: string,
+  ) {
+    if (!supabase) {
+      setShiftSaveStatus("saved");
+      setShiftSaveMessage("保存しました");
+      return;
+    }
+
+    setSavingAssignmentDates((current) => (current.includes(dateKey) ? current : [...current, dateKey]));
+    setIsSaving(true);
+    setErrorMessage("");
+    setShiftSaveStatus("saving");
+    setShiftSaveMessage("保存中...");
+
+    try {
+      const saveResult = await saveShiftAssignments(nextAssignments);
+      console.log("[shift_assignments] optimistic save completed", {
+        dateKey,
+        rowsCount: saveResult.rowsCount,
+        savedCount: saveResult.savedCount,
+        source,
+        targetMonth,
+      });
+      setShiftSaveStatus("saved");
+      setShiftSaveMessage("保存しました");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "シフト保存に失敗しました。";
+      setAssignments(previousAssignments);
+      setErrorMessage(`シフト保存に失敗しました: ${message}`);
+      setShiftSaveStatus("error");
+      setShiftSaveMessage(`保存に失敗しました: ${message}`);
+    } finally {
+      setSavingAssignmentDates((current) => current.filter((date) => date !== dateKey));
       setIsSaving(false);
     }
   }
@@ -931,6 +976,7 @@ export default function Home() {
           setBulkWeekdays={setBulkWeekdays}
           setDragStaffId={setDragStaffId}
           shiftIssues={shiftIssues}
+          savingAssignmentDates={savingAssignmentDates}
           shiftSaveMessage={shiftSaveMessage}
           shiftSaveStatus={shiftSaveStatus}
           staff={staff}
@@ -1296,6 +1342,7 @@ function AdminView(props: {
   moveDraggedStaff: (dateKey: string) => void;
   renderedDateRangeLabel: string;
   required: RequiredStaff;
+  savingAssignmentDates: string[];
   setActiveTab: (tab: AdminTab) => void;
   setBulkValue: (value: number) => void;
   setBulkWeekdays: (weekdays: Weekday[]) => void;
@@ -1599,6 +1646,7 @@ function ShiftEditor({
   moveDraggedStaff,
   renderedDateRangeLabel,
   required,
+  savingAssignmentDates,
   setDragStaffId,
   shiftIssues,
   shiftSaveMessage,
@@ -1665,6 +1713,7 @@ function ShiftEditor({
             {monthDates.map((date) => {
               const key = toDateKey(date);
               const closed = isClosedDay(date);
+              const savingDate = savingAssignmentDates.includes(key);
               return (
                 <tr key={key} className={classNames("border-b border-neutral-100", closed && "bg-neutral-100 text-neutral-400")}>
                   <td className="sticky left-0 bg-inherit px-3 py-3 font-medium">
@@ -1674,15 +1723,19 @@ function ShiftEditor({
                   <td
                     className="min-h-14 px-3 py-3"
                     onDragOver={(event) => event.preventDefault()}
-                    onDrop={() => moveDraggedStaff(key)}
+                    onDrop={() => {
+                      if (!savingDate) moveDraggedStaff(key);
+                    }}
                   >
                     <div className="flex min-h-9 flex-wrap gap-2">
                       {(assignments[key] ?? []).map((staffId) => (
                         <span
                           key={staffId}
                           className={classNames("cursor-grab rounded-md bg-emerald-100 px-2 py-1 text-emerald-900", dragStaffId === staffId && "opacity-50")}
-                          draggable
-                          onDragStart={() => setDragStaffId(staffId)}
+                          draggable={!savingDate}
+                          onDragStart={() => {
+                            if (!savingDate) setDragStaffId(staffId);
+                          }}
                           onDragEnd={() => setDragStaffId(null)}
                         >
                           {staff.find((member) => member.id === staffId)?.name}
@@ -1696,12 +1749,12 @@ function ShiftEditor({
                         <button
                           key={member.id}
                           className={classNames(
-                            "inline-flex h-8 items-center gap-1 rounded-md border px-2 text-xs",
+                            "inline-flex h-8 items-center gap-1 rounded-md border px-2 text-xs disabled:cursor-not-allowed disabled:opacity-50",
                             assignments[key]?.includes(member.id)
                               ? "border-teal-700 bg-teal-700 text-white"
                               : "border-neutral-300 bg-white text-neutral-800",
                           )}
-                          disabled={closed}
+                          disabled={closed || savingDate}
                           onClick={() => toggleAssignment(key, member.id)}
                           type="button"
                         >
