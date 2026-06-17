@@ -418,7 +418,7 @@ export default function Home() {
       targetMonth,
     });
     setAssignments(nextAssignments);
-    void saveOptimisticShiftAssignments(nextAssignments, previousAssignments, dateKey, "manual-toggle");
+    void saveOptimisticShiftDayAssignments(dateKey, nextAssignments[dateKey] ?? [], previousAssignments);
   }
 
   function moveDraggedStaff(dateKey: string) {
@@ -712,6 +712,45 @@ export default function Home() {
     }
   }
 
+  async function saveOptimisticShiftDayAssignments(
+    dateKey: string,
+    staffIds: string[],
+    previousAssignments: ShiftAssignment,
+  ) {
+    if (!supabase) {
+      setShiftSaveStatus("saved");
+      setShiftSaveMessage("保存しました");
+      return;
+    }
+
+    setSavingAssignmentDates((current) => (current.includes(dateKey) ? current : [...current, dateKey]));
+    setIsSaving(true);
+    setErrorMessage("");
+    setShiftSaveStatus("saving");
+    setShiftSaveMessage("保存中...");
+
+    try {
+      const saveResult = await saveShiftDayAssignments(dateKey, staffIds);
+      console.log("[shift_assignments] optimistic day save completed", {
+        dateKey,
+        rowsCount: saveResult.rowsCount,
+        staffIds,
+        targetMonth,
+      });
+      setShiftSaveStatus("saved");
+      setShiftSaveMessage("保存しました");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "シフト保存に失敗しました。";
+      setAssignments(previousAssignments);
+      setErrorMessage(`シフト保存に失敗しました: ${message}`);
+      setShiftSaveStatus("error");
+      setShiftSaveMessage(`保存に失敗しました: ${message}`);
+    } finally {
+      setSavingAssignmentDates((current) => current.filter((date) => date !== dateKey));
+      setIsSaving(false);
+    }
+  }
+
   async function saveShiftAssignments(nextAssignments: ShiftAssignment) {
     if (!supabase) {
       return { rowsCount: 0, savedCount: 0 };
@@ -745,6 +784,40 @@ export default function Home() {
       targetMonth,
     });
     return { rowsCount: result.rowsCount ?? 0, savedCount: result.savedCount ?? 0 };
+  }
+
+  async function saveShiftDayAssignments(dateKey: string, staffIds: string[]) {
+    if (!supabase) {
+      return { rowsCount: staffIds.length };
+    }
+    if (!canAdmin) {
+      throw new Error("管理者のみシフトを保存できます。");
+    }
+
+    const token = await getCurrentAccessToken();
+    const response = await fetch("/api/shifts/update-day", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        date: dateKey,
+        staffIds,
+        targetMonth,
+      }),
+    });
+    const result = (await response.json()) as { error?: string; rowsCount?: number };
+    if (!response.ok) {
+      throw new Error(result.error ?? "対象日のシフト保存に失敗しました。");
+    }
+    console.log("[shift_assignments] update day response", {
+      dateKey,
+      rowsCount: result.rowsCount ?? 0,
+      staffIds,
+      targetMonth,
+    });
+    return { rowsCount: result.rowsCount ?? 0 };
   }
 
   async function adminLogin() {
