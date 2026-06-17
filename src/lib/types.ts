@@ -22,6 +22,8 @@ export type RequiredStaff = Record<string, number>;
 
 export type ShiftAssignment = Record<string, string[]>;
 
+export type ShiftPeriodStatus = "draft" | "confirmed";
+
 export type ShiftIssue = {
   date: string;
   required: number;

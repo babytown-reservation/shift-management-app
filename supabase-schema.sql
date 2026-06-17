@@ -48,6 +48,14 @@ create table if not exists public.required_staff (
   required_count int not null default 0
 );
 
+create table if not exists public.shift_periods (
+  id uuid primary key default gen_random_uuid(),
+  target_month text not null unique,
+  status text not null default 'draft' check (status in ('draft', 'confirmed')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.shift_assignments (
   id uuid primary key default gen_random_uuid(),
   date date not null,
@@ -106,6 +114,7 @@ alter table public.staff enable row level security;
 alter table public.time_off_requests enable row level security;
 alter table public.required_staff enable row level security;
 alter table public.shift_assignments enable row level security;
+alter table public.shift_periods enable row level security;
 
 create or replace function public.is_admin()
 returns boolean
@@ -160,6 +169,12 @@ with check (public.is_own_staff(staff_id));
 drop policy if exists "Admins can manage required staff" on public.required_staff;
 create policy "Admins can manage required staff"
 on public.required_staff for all
+using (public.is_admin())
+with check (public.is_admin());
+
+drop policy if exists "Admins can manage shift periods" on public.shift_periods;
+create policy "Admins can manage shift periods"
+on public.shift_periods for all
 using (public.is_admin())
 with check (public.is_admin());
 

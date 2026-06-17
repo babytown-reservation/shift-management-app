@@ -35,10 +35,11 @@ import {
   deleteTimeOffRequest,
   loadSupabaseStore,
   upsertRequiredStaff,
+  upsertShiftPeriodStatus,
   upsertStaff,
   upsertTimeOffRequest,
 } from "@/lib/supabase-store";
-import type { RequiredStaff, ShiftAssignment, Staff, TimeOffRequest, Weekday } from "@/lib/types";
+import type { RequiredStaff, ShiftAssignment, ShiftPeriodStatus, Staff, TimeOffRequest, Weekday } from "@/lib/types";
 
 const weekdays: Weekday[] = [1, 2, 3, 4, 5];
 const tabs = ["dashboard", "staff", "required", "requests", "shift"] as const;
@@ -86,6 +87,7 @@ export default function Home() {
   const [requests, setRequests] = useState<TimeOffRequest[]>(initialRequests);
   const [required, setRequired] = useState<RequiredStaff>(initialRequiredStaff);
   const [assignments, setAssignments] = useState<ShiftAssignment>({});
+  const [shiftStatus, setShiftStatus] = useState<ShiftPeriodStatus>("draft");
   const [savingAssignmentDates, setSavingAssignmentDates] = useState<string[]>([]);
   const [dragStaffId, setDragStaffId] = useState<string | null>(null);
   const [bulkValue, setBulkValue] = useState(3);
@@ -107,6 +109,7 @@ export default function Home() {
     targetMonth: string;
   }>({ rowsCount: null, source: "未取得", targetMonth });
   const canAdmin = !isSupabaseEnabled || authRole === "admin";
+  const isShiftConfirmed = shiftStatus === "confirmed";
 
   const monthDates = useMemo(() => getMonthDates(targetMonth), [targetMonth]);
   const targetPeriodLabel = useMemo(() => getShiftPeriodLabel(targetMonth), [targetMonth]);
@@ -212,6 +215,7 @@ export default function Home() {
         setRequests(initialRequests);
         setRequired(initialRequiredStaff);
         setAssignments({});
+        setShiftStatus("draft");
       }
     });
 
@@ -293,6 +297,7 @@ export default function Home() {
           targetMonth,
         });
         setAssignments(loadedAssignments);
+        setShiftStatus(store.shiftStatus);
         setActiveStaffId((current) => (store.staff.some((member) => member.id === current) ? current : (store.staff[0]?.id ?? "")));
         if (authRole === "staff" && store.staff.length === 0) {
           setErrorMessage("ログイン中のメールアドレスに紐づくスタッフ情報がありません。管理者にスタッフ招待またはメール登録を依頼してください。");
@@ -353,6 +358,10 @@ export default function Home() {
       setErrorMessage("管理者のみ必要人数を編集できます。");
       return;
     }
+    if (isShiftConfirmed) {
+      setErrorMessage("確定済みのシフトは必要人数を編集できません。");
+      return;
+    }
     let nextRequired: RequiredStaff = {};
     setRequired((current) => {
       const next = { ...current };
@@ -369,6 +378,10 @@ export default function Home() {
   async function createShift() {
     if (!canAdmin) {
       setErrorMessage("管理者のみシフトを自動作成できます。");
+      return;
+    }
+    if (isShiftConfirmed) {
+      setErrorMessage("確定済みのシフトは自動作成できません。");
       return;
     }
     if (isGeneratingShift) return;
@@ -405,6 +418,10 @@ export default function Home() {
       setErrorMessage("管理者のみシフトを編集できます。");
       return;
     }
+    if (isShiftConfirmed) {
+      setErrorMessage("確定済みのシフトは編集できません。");
+      return;
+    }
     if (savingAssignmentDates.includes(dateKey)) return;
     const previousAssignments = assignments;
     const selected = new Set(assignments[dateKey] ?? []);
@@ -424,6 +441,10 @@ export default function Home() {
   function moveDraggedStaff(dateKey: string) {
     if (!canAdmin) {
       setErrorMessage("管理者のみシフトを編集できます。");
+      return;
+    }
+    if (isShiftConfirmed) {
+      setErrorMessage("確定済みのシフトは編集できません。");
       return;
     }
     if (!dragStaffId || isClosedDay(new Date(dateKey)) || savingAssignmentDates.includes(dateKey)) return;
@@ -528,8 +549,45 @@ export default function Home() {
       setErrorMessage("管理者のみ必要人数を編集できます。");
       return;
     }
+    if (isShiftConfirmed) {
+      setErrorMessage("確定済みのシフトは必要人数を編集できません。");
+      return;
+    }
     setRequired((current) => ({ ...current, [dateKey]: count }));
     void runSupabaseAction(() => upsertRequiredStaff(supabase!, { [dateKey]: count }));
+  }
+
+  async function updateShiftStatus(nextStatus: ShiftPeriodStatus) {
+    if (!canAdmin) {
+      setErrorMessage("管理者のみシフト状態を変更できます。");
+      return;
+    }
+
+    const confirmMessage =
+      nextStatus === "confirmed" ? "この月度のシフトを確定しますか？" : "シフトのロックを解除しますか？";
+    if (!window.confirm(confirmMessage)) return;
+
+    const previousStatus = shiftStatus;
+    setShiftStatus(nextStatus);
+    setIsSaving(true);
+    setErrorMessage("");
+    setShiftSaveStatus("saving");
+    setShiftSaveMessage("保存中...");
+    try {
+      if (supabase) {
+        await upsertShiftPeriodStatus(supabase, targetMonth, nextStatus);
+      }
+      setShiftSaveStatus("saved");
+      setShiftSaveMessage("保存しました");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "シフト状態の保存に失敗しました。";
+      setShiftStatus(previousStatus);
+      setErrorMessage(message);
+      setShiftSaveStatus("error");
+      setShiftSaveMessage(`保存に失敗しました: ${message}`);
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function inviteStaff(name: string, email: string, staffId?: string) {
@@ -1040,6 +1098,7 @@ export default function Home() {
           inviteStaff={inviteStaff}
           isGeneratingShift={isGeneratingShift}
           isLoading={isLoading}
+          isShiftConfirmed={isShiftConfirmed}
           monthDates={monthDates}
           monthRequests={monthRequests}
           moveDraggedStaff={moveDraggedStaff}
@@ -1052,6 +1111,7 @@ export default function Home() {
           savingAssignmentDates={savingAssignmentDates}
           shiftSaveMessage={shiftSaveMessage}
           shiftSaveStatus={shiftSaveStatus}
+          shiftStatus={shiftStatus}
           staff={staff}
           stats={stats}
           submittedStaffIds={submittedStaffIds}
@@ -1059,6 +1119,7 @@ export default function Home() {
           targetPeriodLabel={targetPeriodLabel}
           renderedDateRangeLabel={renderedDateRangeLabel}
           toggleAssignment={toggleAssignment}
+          updateShiftStatus={updateShiftStatus}
           updateRequiredForDate={updateRequiredForDate}
           updateStaff={updateStaff}
         />
@@ -1410,6 +1471,7 @@ function AdminView(props: {
   inviteStaff: (name: string, email: string, staffId?: string) => void;
   isGeneratingShift: boolean;
   isLoading: boolean;
+  isShiftConfirmed: boolean;
   monthDates: Date[];
   monthRequests: TimeOffRequest[];
   moveDraggedStaff: (dateKey: string) => void;
@@ -1423,12 +1485,14 @@ function AdminView(props: {
   shiftIssues: Array<{ date: string; required: number; assigned: number }>;
   shiftSaveMessage: string;
   shiftSaveStatus: RequestSaveStatus;
+  shiftStatus: ShiftPeriodStatus;
   staff: Staff[];
   stats: Array<{ staffId: string; name: string; count: number }>;
   submittedStaffIds: Set<string>;
   targetMonth: string;
   targetPeriodLabel: string;
   toggleAssignment: (dateKey: string, staffId: string) => void;
+  updateShiftStatus: (status: ShiftPeriodStatus) => void;
   updateRequiredForDate: (dateKey: string, count: number) => void;
   updateStaff: (staffId: string, patch: Partial<Staff>) => void;
 }) {
@@ -1469,6 +1533,7 @@ function AdminView(props: {
 function Dashboard({
   createShift,
   isGeneratingShift,
+  isShiftConfirmed,
   renderedDateRangeLabel,
   shiftIssues,
   staff,
@@ -1492,11 +1557,11 @@ function Dashboard({
       <div className="flex flex-wrap gap-2">
         <button
           className="inline-flex h-11 items-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={isGeneratingShift}
+          disabled={isGeneratingShift || isShiftConfirmed}
           onClick={createShift}
         >
           <Sparkles size={17} />
-          {isGeneratingShift ? "自動作成中..." : "自動作成"}
+          {isGeneratingShift ? "自動作成中..." : isShiftConfirmed ? "確定済み" : "自動作成"}
         </button>
       </div>
       <IssueList issues={shiftIssues} />
@@ -1617,6 +1682,7 @@ function RequiredManager({
   applyBulkRequired,
   bulkValue,
   bulkWeekdays,
+  isShiftConfirmed,
   monthDates,
   renderedDateRangeLabel,
   required,
@@ -1634,14 +1700,15 @@ function RequiredManager({
             <label key={weekday} className="inline-flex items-center gap-2 rounded-md border border-neutral-200 px-3 py-2 text-sm">
               <input
                 checked={bulkWeekdays.includes(weekday)}
+                disabled={isShiftConfirmed}
                 onChange={() => setBulkWeekdays(bulkWeekdays.includes(weekday) ? bulkWeekdays.filter((day) => day !== weekday) : [...bulkWeekdays, weekday])}
                 type="checkbox"
               />
               {weekdayLabels[weekday]}
             </label>
           ))}
-          <input className="h-10 w-24 rounded-md border border-neutral-300 px-3" min={0} type="number" value={bulkValue} onChange={(event) => setBulkValue(Number(event.target.value))} />
-          <button className="inline-flex h-10 items-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-medium text-white" onClick={applyBulkRequired}>
+          <input className="h-10 w-24 rounded-md border border-neutral-300 px-3 disabled:bg-neutral-100" disabled={isShiftConfirmed} min={0} type="number" value={bulkValue} onChange={(event) => setBulkValue(Number(event.target.value))} />
+          <button className="inline-flex h-10 items-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60" disabled={isShiftConfirmed} onClick={applyBulkRequired}>
             <Save size={16} />
             適用
           </button>
@@ -1662,7 +1729,7 @@ function RequiredManager({
               </span>
               <input
                 className="mt-2 h-10 w-full rounded-md border border-neutral-300 px-3"
-                disabled={closed}
+                disabled={closed || isShiftConfirmed}
                 min={0}
                 type="number"
                 value={required[key] ?? getDefaultRequired(date)}
@@ -1715,6 +1782,7 @@ function ShiftEditor({
   createShift,
   dragStaffId,
   isGeneratingShift,
+  isShiftConfirmed,
   monthDates,
   moveDraggedStaff,
   renderedDateRangeLabel,
@@ -1724,27 +1792,51 @@ function ShiftEditor({
   shiftIssues,
   shiftSaveMessage,
   shiftSaveStatus,
+  shiftStatus,
   staff,
   stats,
   targetMonth,
   targetPeriodLabel,
   toggleAssignment,
+  updateShiftStatus,
 }: Parameters<typeof AdminView>[0]) {
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap gap-2">
         <button
           className="inline-flex h-10 items-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={isGeneratingShift}
+          disabled={isGeneratingShift || isShiftConfirmed}
           onClick={createShift}
         >
           <Sparkles size={16} />
-          {isGeneratingShift ? "自動作成中..." : "自動作成"}
+          {isGeneratingShift ? "自動作成中..." : isShiftConfirmed ? "確定済み" : "自動作成"}
         </button>
         <button className="inline-flex h-10 items-center gap-2 rounded-md bg-neutral-950 px-3 text-sm font-medium text-white" onClick={() => downloadShiftWorkbook(targetMonth, staff, assignments)}>
           <Download size={16} />
           Excel出力
         </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-neutral-200 bg-white p-4">
+        <span className={classNames("rounded-md px-3 py-2 text-sm font-semibold", isShiftConfirmed ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800")}>
+          状態: {isShiftConfirmed ? "確定" : "作成中"}
+        </span>
+        {shiftStatus === "draft" ? (
+          <button
+            className="inline-flex h-10 items-center rounded-md bg-teal-700 px-3 text-sm font-medium text-white"
+            onClick={() => updateShiftStatus("confirmed")}
+            type="button"
+          >
+            シフト確定
+          </button>
+        ) : (
+          <button
+            className="inline-flex h-10 items-center rounded-md border border-neutral-300 bg-white px-3 text-sm font-medium"
+            onClick={() => updateShiftStatus("draft")}
+            type="button"
+          >
+            確定解除
+          </button>
+        )}
       </div>
       <div
         className={classNames(
@@ -1797,7 +1889,7 @@ function ShiftEditor({
                     className="min-h-14 px-3 py-3"
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={() => {
-                      if (!savingDate) moveDraggedStaff(key);
+                      if (!savingDate && !isShiftConfirmed) moveDraggedStaff(key);
                     }}
                   >
                     <div className="flex min-h-9 flex-wrap gap-2">
@@ -1805,9 +1897,9 @@ function ShiftEditor({
                         <span
                           key={staffId}
                           className={classNames("cursor-grab rounded-md bg-emerald-100 px-2 py-1 text-emerald-900", dragStaffId === staffId && "opacity-50")}
-                          draggable={!savingDate}
+                          draggable={!savingDate && !isShiftConfirmed}
                           onDragStart={() => {
-                            if (!savingDate) setDragStaffId(staffId);
+                            if (!savingDate && !isShiftConfirmed) setDragStaffId(staffId);
                           }}
                           onDragEnd={() => setDragStaffId(null)}
                         >
@@ -1827,7 +1919,7 @@ function ShiftEditor({
                               ? "border-teal-700 bg-teal-700 text-white"
                               : "border-neutral-300 bg-white text-neutral-800",
                           )}
-                          disabled={closed || savingDate}
+                          disabled={closed || savingDate || isShiftConfirmed}
                           onClick={() => toggleAssignment(key, member.id)}
                           type="button"
                         >

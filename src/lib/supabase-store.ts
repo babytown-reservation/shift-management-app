@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getShiftPeriodRange, toDateKey } from "./date-utils";
-import type { RequiredStaff, ShiftAssignment, Staff, TimeOffRequest, Weekday } from "./types";
+import type { RequiredStaff, ShiftAssignment, ShiftPeriodStatus, Staff, TimeOffRequest, Weekday } from "./types";
 
 type StaffRow = {
   id: string;
@@ -32,11 +32,16 @@ type AssignmentRow = {
   staff_id: string;
 };
 
+type ShiftPeriodRow = {
+  status: ShiftPeriodStatus;
+};
+
 export type SupabaseStore = {
   staff: Staff[];
   requests: TimeOffRequest[];
   required: RequiredStaff;
   assignments: ShiftAssignment;
+  shiftStatus: ShiftPeriodStatus;
 };
 
 export type LoadScope =
@@ -100,6 +105,10 @@ function assertResult(error: { message: string } | null) {
   if (error) throw new Error(error.message);
 }
 
+function toShiftStatus(row: ShiftPeriodRow | null): ShiftPeriodStatus {
+  return row?.status === "confirmed" ? "confirmed" : "draft";
+}
+
 export async function loadSupabaseStore(client: SupabaseClient, targetMonth: string, scope: LoadScope): Promise<SupabaseStore> {
   const { start, end } = monthRange(targetMonth);
   const staffSelect = "id,auth_user_id,email,name,note,workdays,min_days,max_days,weekly_days,monthly_max";
@@ -115,7 +124,7 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
     const staff = staffResult.data ? [toStaff(staffResult.data as StaffRow)] : [];
     const staffId = staff[0]?.id;
     if (!staffId) {
-      return { staff: [], requests: [], required: {}, assignments: {} };
+      return { staff: [], requests: [], required: {}, assignments: {}, shiftStatus: "draft" };
     }
 
     const [requestsResult, assignmentsResult] = await Promise.all([
@@ -141,10 +150,11 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
       requests: (requestsResult.data ?? []).map((row) => toRequest(row as TimeOffRow)),
       required: {},
       assignments: toAssignments((assignmentsResult.data ?? []) as AssignmentRow[]),
+      shiftStatus: "draft",
     };
   }
 
-  const [staffResult, requestsResult, requiredResult, assignmentsResult] = await Promise.all([
+  const [staffResult, requestsResult, requiredResult, assignmentsResult, shiftPeriodResult] = await Promise.all([
     client.from("staff").select(staffSelect).order("created_at", { ascending: true }),
     client
       .from("time_off_requests")
@@ -154,12 +164,14 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
       .order("date", { ascending: true }),
     client.from("required_staff").select("date,required_count").gte("date", start).lte("date", end),
     client.from("shift_assignments").select("date,staff_id").gte("date", start).lte("date", end),
+    client.from("shift_periods").select("status").eq("target_month", targetMonth).maybeSingle(),
   ]);
 
   assertResult(staffResult.error);
   assertResult(requestsResult.error);
   assertResult(requiredResult.error);
   assertResult(assignmentsResult.error);
+  assertResult(shiftPeriodResult.error);
   console.log("[staff] load", {
     rowsCount: staffResult.data?.length ?? 0,
     scope: scope.role,
@@ -170,7 +182,20 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
     requests: (requestsResult.data ?? []).map((row) => toRequest(row as TimeOffRow)),
     required: toRequired((requiredResult.data ?? []) as RequiredRow[]),
     assignments: toAssignments((assignmentsResult.data ?? []) as AssignmentRow[]),
+    shiftStatus: toShiftStatus(shiftPeriodResult.data as ShiftPeriodRow | null),
   };
+}
+
+export async function upsertShiftPeriodStatus(client: SupabaseClient, targetMonth: string, status: ShiftPeriodStatus) {
+  const { error } = await client.from("shift_periods").upsert(
+    {
+      status,
+      target_month: targetMonth,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "target_month" },
+  );
+  assertResult(error);
 }
 
 export async function upsertStaff(client: SupabaseClient, staff: Staff) {
