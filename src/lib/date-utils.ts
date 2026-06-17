@@ -1,4 +1,4 @@
-import { addDays, differenceInCalendarDays, format, getDay } from "date-fns";
+import { addDays, addMonths, differenceInCalendarDays, format, getDay } from "date-fns";
 import type { Weekday } from "./types";
 
 export const weekdayLabels = ["日", "月", "火", "水", "木", "金", "土"] as const;
@@ -9,6 +9,10 @@ export function toDateKey(date: Date) {
 
 export function monthKey(date: Date) {
   return format(date, "yyyy-MM");
+}
+
+export function getDefaultTargetMonth(date: Date) {
+  return monthKey(addMonths(date, 1));
 }
 
 export function getShiftPeriodRange(targetMonth: string) {

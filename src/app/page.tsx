@@ -16,12 +16,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  getDefaultTargetMonth,
   getMonthDates,
   getMonthDegreeLabel,
   getShiftPeriodLabel,
   getWeekday,
   isDateInShiftPeriod,
-  monthKey,
   toDateKey,
   weekdayLabels,
 } from "@/lib/date-utils";
@@ -80,7 +80,7 @@ export default function Home() {
   const [loginNotice, setLoginNotice] = useState("");
   const [mode, setMode] = useState<"staff" | "admin">("staff");
   const [adminTab, setAdminTab] = useState<AdminTab>("dashboard");
-  const [targetMonth, setTargetMonth] = useState(monthKey(new Date()));
+  const [targetMonth, setTargetMonth] = useState(getDefaultTargetMonth(new Date()));
   const [staff, setStaff] = useState<Staff[]>(initialStaff);
   const [activeStaffId, setActiveStaffId] = useState(initialStaff[0]?.id ?? "");
   const [requests, setRequests] = useState<TimeOffRequest[]>(initialRequests);
