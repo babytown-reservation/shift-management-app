@@ -16,8 +16,9 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  addShiftMonths,
   getDefaultTargetMonth,
   getCurrentShiftMonth,
   getMonthDates,
@@ -105,7 +106,7 @@ export default function Home() {
   const [adminTab, setAdminTab] = useState<AdminTab>("dashboard");
   const [targetMonth, setTargetMonth] = useState(getDefaultTargetMonth(new Date()));
   const [staffRequestMonth] = useState(getNextRequestShiftMonth(new Date()));
-  const [publishedShiftMonth] = useState(getCurrentShiftMonth(new Date()));
+  const [publishedShiftMonth, setPublishedShiftMonth] = useState(getCurrentShiftMonth(new Date()));
   const [staff, setStaff] = useState<Staff[]>(initialStaff);
   const [activeStaffId, setActiveStaffId] = useState(initialStaff[0]?.id ?? "");
   const [requests, setRequests] = useState<TimeOffRequest[]>(initialRequests);
@@ -116,6 +117,7 @@ export default function Home() {
   const [publishedAssignments, setPublishedAssignments] = useState<ShiftAssignment>({});
   const [publishedStaff, setPublishedStaff] = useState<PublishedShiftStaff[]>([]);
   const [isPublishedShiftLoading, setIsPublishedShiftLoading] = useState(false);
+  const publishedShiftFetchId = useRef(0);
   const [savingAssignmentDates, setSavingAssignmentDates] = useState<string[]>([]);
   const [dragStaffId, setDragStaffId] = useState<string | null>(null);
   const [bulkValue, setBulkValue] = useState(3);
@@ -345,8 +347,6 @@ export default function Home() {
           setIsShiftPublished(store.shiftPublished);
           setPublishedAssignments({});
           setPublishedStaff([]);
-        } else {
-          await fetchPublishedShift(publishedShiftMonth);
         }
         setActiveStaffId((current) => (store.staff.some((member) => member.id === current) ? current : (store.staff[0]?.id ?? "")));
         if (authRole === "staff" && store.staff.length === 0) {
@@ -364,9 +364,21 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-    // fetchPublishedShift is declared in component scope and receives the staff publication month explicitly.
+  }, [authRole, authUser, isAuthReady, staffRequestMonth, supabase, targetMonth]);
+
+  useEffect(() => {
+    if (!supabase || !authUser || !isAuthReady || authRole !== "staff") return;
+
+    void fetchPublishedShift(publishedShiftMonth).catch((error) => {
+      setErrorMessage(error instanceof Error ? error.message : "公開シフトを取得できませんでした。");
+    });
+
+    return () => {
+      publishedShiftFetchId.current += 1;
+    };
+    // fetchPublishedShift is declared in component scope and receives the selected month explicitly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authRole, authUser, isAuthReady, publishedShiftMonth, staffRequestMonth, supabase, targetMonth]);
+  }, [authRole, authUser, isAuthReady, publishedShiftMonth, supabase]);
 
   function toggleRequest(dateKey: string) {
     if (!activeStaff) return;
@@ -818,6 +830,9 @@ export default function Home() {
   }
 
   async function fetchPublishedShift(targetPublishedMonth: string) {
+    const fetchId = publishedShiftFetchId.current + 1;
+    publishedShiftFetchId.current = fetchId;
+
     if (!supabase) {
       setIsShiftPublished(false);
       setPublishedAssignments({});
@@ -838,12 +853,22 @@ export default function Home() {
         staff?: PublishedShiftStaff[];
       };
       if (!response.ok) throw new Error(result.error ?? "公開シフトを取得できませんでした。");
+      if (fetchId !== publishedShiftFetchId.current) return;
       setIsShiftPublished(Boolean(result.published));
       setPublishedAssignments(uniqueAssignments(result.assignments ?? {}));
       setPublishedStaff(result.staff ?? []);
+    } catch (error) {
+      if (fetchId !== publishedShiftFetchId.current) return;
+      throw error;
     } finally {
-      setIsPublishedShiftLoading(false);
+      if (fetchId === publishedShiftFetchId.current) {
+        setIsPublishedShiftLoading(false);
+      }
     }
+  }
+
+  function movePublishedShiftMonth(amount: -1 | 1) {
+    setPublishedShiftMonth((current) => addShiftMonths(current, amount));
   }
 
   async function fetchSavedShiftAssignments() {
@@ -1310,6 +1335,7 @@ export default function Home() {
           publishedShiftDates={publishedShiftDates}
           publishedShiftDegreeLabel={publishedShiftDegreeLabel}
           publishedShiftPeriodLabel={publishedShiftPeriodLabel}
+          movePublishedShiftMonth={movePublishedShiftMonth}
           requestSaveMessage={requestSaveMessage}
           requestSaveStatus={requestSaveStatus}
           requests={requests}
@@ -1535,6 +1561,7 @@ function StaffView({
   publishedShiftDates,
   publishedShiftDegreeLabel,
   publishedShiftPeriodLabel,
+  movePublishedShiftMonth,
   publishedStaff,
   requestSaveMessage,
   requestSaveStatus,
@@ -1558,6 +1585,7 @@ function StaffView({
   publishedShiftDates: Date[];
   publishedShiftDegreeLabel: string;
   publishedShiftPeriodLabel: string;
+  movePublishedShiftMonth: (amount: -1 | 1) => void;
   publishedStaff: PublishedShiftStaff[];
   requestSaveMessage: string;
   requestSaveStatus: RequestSaveStatus;
@@ -1633,6 +1661,7 @@ function StaffView({
           isPublished={isShiftPublished}
           monthDates={publishedShiftDates}
           monthDegreeLabel={publishedShiftDegreeLabel}
+          movePublishedShiftMonth={movePublishedShiftMonth}
           staff={visibleStaff}
           targetPeriodLabel={publishedShiftPeriodLabel}
         />
@@ -1647,6 +1676,7 @@ function PublishedShiftTable({
   isPublished,
   monthDates,
   monthDegreeLabel,
+  movePublishedShiftMonth,
   staff,
   targetPeriodLabel,
 }: {
@@ -1655,32 +1685,42 @@ function PublishedShiftTable({
   isPublished: boolean;
   monthDates: Date[];
   monthDegreeLabel: string;
+  movePublishedShiftMonth: (amount: -1 | 1) => void;
   staff: PublishedShiftStaff[];
   targetPeriodLabel: string;
 }) {
-  if (isLoading) {
-    return (
-      <section className="rounded-lg border border-neutral-200 bg-white p-4">
-        <h2 className="text-lg font-semibold">公開シフト：{monthDegreeLabel}</h2>
-        <p className="mt-2 text-sm text-neutral-600">公開状況を確認しています...</p>
-      </section>
-    );
-  }
-
-  if (!isPublished) {
-    return (
-      <section className="rounded-lg border border-neutral-200 bg-white p-4">
-        <h2 className="text-lg font-semibold">公開シフト：{monthDegreeLabel}</h2>
-        <p className="mt-2 text-sm text-neutral-600">この月度のシフトはまだ公開されていません。</p>
-      </section>
-    );
-  }
-
   return (
     <section className="rounded-lg border border-neutral-200 bg-white p-4">
-      <h2 className="text-lg font-semibold">公開シフト：{monthDegreeLabel}</h2>
-      <p className="mt-1 text-sm font-medium text-neutral-700">対象期間：{targetPeriodLabel}</p>
-      <div className="mt-3 overflow-x-auto">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">公開シフト：{monthDegreeLabel}</h2>
+          <p className="mt-1 text-sm font-medium text-neutral-700">対象期間：{targetPeriodLabel}</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:flex">
+          <button
+            className="inline-flex h-11 items-center justify-center rounded-md border border-neutral-300 bg-white px-4 text-sm font-medium text-neutral-800 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={isLoading}
+            onClick={() => movePublishedShiftMonth(-1)}
+            type="button"
+          >
+            ← 前の月度
+          </button>
+          <button
+            className="inline-flex h-11 items-center justify-center rounded-md border border-neutral-300 bg-white px-4 text-sm font-medium text-neutral-800 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={isLoading}
+            onClick={() => movePublishedShiftMonth(1)}
+            type="button"
+          >
+            次の月度 →
+          </button>
+        </div>
+      </div>
+      {isLoading ? <p className="mt-4 text-sm text-neutral-600">公開状況を確認しています...</p> : null}
+      {!isLoading && !isPublished ? (
+        <p className="mt-4 text-sm text-neutral-600">この月度のシフトはまだ公開されていません。</p>
+      ) : null}
+      {!isLoading && isPublished ? (
+        <div className="mt-4 overflow-x-auto">
         <table className="min-w-max border-collapse text-center text-xs">
           <thead>
             <tr>
@@ -1737,6 +1777,7 @@ function PublishedShiftTable({
           </tbody>
         </table>
       </div>
+      ) : null}
     </section>
   );
 }

@@ -25,6 +25,11 @@ export function getNextRequestShiftMonth(date: Date) {
   return monthKey(addMonths(new Date(year, month - 1, 1), 1));
 }
 
+export function addShiftMonths(targetMonth: string, amount: number) {
+  const [year, month] = targetMonth.split("-").map(Number);
+  return monthKey(addMonths(new Date(year, month - 1, 1), amount));
+}
+
 export function getShiftPeriodRange(targetMonth: string) {
   const [year, month] = targetMonth.split("-").map(Number);
   return {
