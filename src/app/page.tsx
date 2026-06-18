@@ -87,6 +87,7 @@ export default function Home() {
   const [loginMode, setLoginMode] = useState<UserRole>("staff");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
+  const [magicLinkEmail, setMagicLinkEmail] = useState("");
   const [loginNotice, setLoginNotice] = useState("");
   const [mode, setMode] = useState<"staff" | "admin">("staff");
   const [adminTab, setAdminTab] = useState<AdminTab>("dashboard");
@@ -644,7 +645,7 @@ export default function Home() {
     }
   }
 
-  async function inviteStaff(name: string, email: string, staffId?: string) {
+  async function inviteStaff(name: string, email: string, staffId?: string, password?: string) {
     if (!supabase || !canAdmin) {
       setErrorMessage("管理者のみスタッフを招待できます。");
       return;
@@ -660,7 +661,7 @@ export default function Home() {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ email, name, staffId }),
+        body: JSON.stringify({ email, name, password, staffId }),
       });
       const result = (await response.json()) as { staff?: Staff; error?: string };
       if (!response.ok || !result.staff) {
@@ -677,6 +678,36 @@ export default function Home() {
       setActiveStaffId(result.staff.id);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "スタッフ招待に失敗しました。");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function resetStaffPassword(staffId: string, password: string) {
+    if (!supabase || !canAdmin) {
+      setErrorMessage("管理者のみスタッフのパスワードを変更できます。");
+      return;
+    }
+    setIsSaving(true);
+    setErrorMessage("");
+    try {
+      const token = await getCurrentAccessToken();
+      const response = await fetch("/api/staff/password", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ password, staffId }),
+      });
+      const result = (await response.json()) as { error?: string; ok?: boolean };
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error ?? "パスワードを更新できませんでした。");
+      }
+      setStaffSaveStatus("saved");
+      setStaffSaveMessage("スタッフのパスワードを更新しました");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "パスワードを更新できませんでした。");
     } finally {
       setIsSaving(false);
     }
@@ -976,6 +1007,34 @@ export default function Home() {
     setIsSaving(false);
   }
 
+  async function staffPasswordLogin() {
+    if (!supabase) return;
+    setIsSaving(true);
+    setErrorMessage("");
+    setLoginNotice("");
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: loginEmail,
+        password: loginPassword,
+      });
+      if (error) throw new Error(error.message);
+      if (!data.user || data.user.app_metadata?.role === "admin") {
+        await supabase.auth.signOut();
+        throw new Error("登録済みスタッフのアカウントではありません。");
+      }
+
+      const staffResult = await supabase.from("staff").select("id").limit(1).maybeSingle();
+      if (staffResult.error || !staffResult.data) {
+        await supabase.auth.signOut();
+        throw new Error("ログイン中のユーザーに紐づくスタッフ情報がありません。");
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "スタッフログインに失敗しました。");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function sendStaffMagicLink() {
     setIsSaving(true);
     setErrorMessage("");
@@ -984,7 +1043,7 @@ export default function Home() {
       const response = await fetch("/api/auth/staff-magic-link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: loginEmail }),
+        body: JSON.stringify({ email: magicLinkEmail }),
       });
       const result = (await response.json()) as { ok?: boolean; error?: string };
       if (!response.ok || !result.ok) {
@@ -1036,12 +1095,15 @@ export default function Home() {
         errorMessage={errorMessage}
         isSaving={isSaving}
         loginMode={loginMode}
+        magicLinkEmail={magicLinkEmail}
         notice={loginNotice}
         onEmailChange={setLoginEmail}
         onAdminLogin={adminLogin}
+        onMagicLinkEmailChange={setMagicLinkEmail}
         onPasswordChange={setLoginPassword}
         onResetAdminPassword={resetAdminPassword}
         onSendStaffMagicLink={sendStaffMagicLink}
+        onStaffPasswordLogin={staffPasswordLogin}
         onModeChange={setLoginMode}
         password={loginPassword}
       />
@@ -1191,6 +1253,7 @@ export default function Home() {
           monthRequests={monthRequests}
           moveDraggedStaff={moveDraggedStaff}
           required={required}
+          resetStaffPassword={resetStaffPassword}
           setActiveTab={setAdminTab}
           setBulkValue={setBulkValue}
           setBulkWeekdays={setBulkWeekdays}
@@ -1230,26 +1293,32 @@ function LoginScreen({
   errorMessage,
   isSaving,
   loginMode,
+  magicLinkEmail,
   notice,
   onAdminLogin,
   onEmailChange,
+  onMagicLinkEmailChange,
   onModeChange,
   onPasswordChange,
   onResetAdminPassword,
   onSendStaffMagicLink,
+  onStaffPasswordLogin,
   password,
 }: {
   email: string;
   errorMessage: string;
   isSaving: boolean;
   loginMode: UserRole;
+  magicLinkEmail: string;
   notice: string;
   onAdminLogin: () => void;
   onEmailChange: (value: string) => void;
+  onMagicLinkEmailChange: (value: string) => void;
   onModeChange: (value: UserRole) => void;
   onPasswordChange: (value: string) => void;
   onResetAdminPassword: () => void;
   onSendStaffMagicLink: () => void;
+  onStaffPasswordLogin: () => void;
   password: string;
 }) {
   const isStaffLogin = loginMode === "staff";
@@ -1260,7 +1329,7 @@ function LoginScreen({
         className="mx-auto my-auto w-full max-w-md rounded-lg border border-neutral-200 bg-white p-6"
         onSubmit={(event) => {
           event.preventDefault();
-          if (isStaffLogin) onSendStaffMagicLink();
+          if (isStaffLogin) onStaffPasswordLogin();
           else onAdminLogin();
         }}
       >
@@ -1299,22 +1368,16 @@ function LoginScreen({
               value={email}
             />
           </label>
-          {isStaffLogin ? (
-            <div className="rounded-md bg-teal-50 px-3 py-2 text-sm text-teal-900">
-              スタッフはメールアドレスだけでログインできます。届いたメール内のリンクを開いてください。
-            </div>
-          ) : (
-            <label className="block text-sm font-medium">
-              パスワード
-              <input
-                autoComplete="current-password"
-                className="mt-1 h-11 w-full rounded-md border border-neutral-300 px-3"
-                onChange={(event) => onPasswordChange(event.target.value)}
-                type="password"
-                value={password}
-              />
-            </label>
-          )}
+          <label className="block text-sm font-medium">
+            パスワード
+            <input
+              autoComplete="current-password"
+              className="mt-1 h-11 w-full rounded-md border border-neutral-300 px-3"
+              onChange={(event) => onPasswordChange(event.target.value)}
+              type="password"
+              value={password}
+            />
+          </label>
         </div>
         {notice ? (
           <div className="mt-4 rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-900">
@@ -1332,9 +1395,31 @@ function LoginScreen({
           type="submit"
         >
           <LogIn size={16} />
-          {isSaving ? "送信中" : isStaffLogin ? "ログインリンクを送信" : "管理者ログイン"}
+          {isSaving ? "送信中" : isStaffLogin ? "ログイン" : "管理者ログイン"}
         </button>
-        {!isStaffLogin ? (
+        {isStaffLogin ? (
+          <div className="mt-5 border-t border-neutral-200 pt-5">
+            <p className="text-sm font-semibold">パスワード未設定・忘れた方</p>
+            <label className="mt-3 block text-sm font-medium">
+              メールアドレス
+              <input
+                autoComplete="email"
+                className="mt-1 h-11 w-full rounded-md border border-neutral-300 px-3"
+                onChange={(event) => onMagicLinkEmailChange(event.target.value)}
+                type="email"
+                value={magicLinkEmail}
+              />
+            </label>
+            <button
+              className="mt-3 h-10 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm font-medium text-neutral-700 disabled:opacity-60"
+              disabled={isSaving || !magicLinkEmail}
+              onClick={onSendStaffMagicLink}
+              type="button"
+            >
+              マジックリンクを送信
+            </button>
+          </div>
+        ) : (
           <button
             className="mt-3 h-10 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm font-medium text-neutral-700 disabled:opacity-60"
             disabled={isSaving || !email}
@@ -1343,7 +1428,7 @@ function LoginScreen({
           >
             管理者パスワード再設定メールを送信
           </button>
-        ) : null}
+        )}
       </form>
     </main>
   );
@@ -1660,7 +1745,7 @@ function AdminView(props: {
   createShift: () => void;
   deleteStaff: (staffId: string) => void;
   dragStaffId: string | null;
-  inviteStaff: (name: string, email: string, staffId?: string) => void;
+  inviteStaff: (name: string, email: string, staffId?: string, password?: string) => void;
   isGeneratingShift: boolean;
   isLoading: boolean;
   isShiftPublished: boolean;
@@ -1670,6 +1755,7 @@ function AdminView(props: {
   moveDraggedStaff: (dateKey: string) => void;
   renderedDateRangeLabel: string;
   required: RequiredStaff;
+  resetStaffPassword: (staffId: string, password: string) => void;
   savingAssignmentDates: string[];
   setActiveTab: (tab: AdminTab) => void;
   setBulkValue: (value: number) => void;
@@ -1776,9 +1862,18 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: "
   );
 }
 
-function StaffManager({ addStaff, deleteStaff, inviteStaff, staff, updateStaff }: Parameters<typeof AdminView>[0]) {
+function StaffManager({
+  addStaff,
+  deleteStaff,
+  inviteStaff,
+  resetStaffPassword,
+  staff,
+  updateStaff,
+}: Parameters<typeof AdminView>[0]) {
   const [inviteName, setInviteName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
+  const [invitePassword, setInvitePassword] = useState("");
+  const [resetPasswords, setResetPasswords] = useState<Record<string, string>>({});
 
   return (
     <section className="rounded-lg border border-neutral-200 bg-white p-4">
@@ -1789,7 +1884,7 @@ function StaffManager({ addStaff, deleteStaff, inviteStaff, staff, updateStaff }
           追加
         </button>
       </div>
-      <div className="mb-4 grid gap-3 rounded-lg border border-teal-100 bg-teal-50 p-3 lg:grid-cols-[1fr_1fr_auto]">
+      <div className="mb-4 grid gap-3 rounded-lg border border-teal-100 bg-teal-50 p-3 lg:grid-cols-[1fr_1fr_1fr_auto_auto]">
         <input
           className="h-10 rounded-md border border-teal-200 bg-white px-3"
           onChange={(event) => setInviteName(event.target.value)}
@@ -1803,13 +1898,32 @@ function StaffManager({ addStaff, deleteStaff, inviteStaff, staff, updateStaff }
           type="email"
           value={inviteEmail}
         />
+        <input
+          autoComplete="new-password"
+          className="h-10 rounded-md border border-teal-200 bg-white px-3"
+          minLength={6}
+          onChange={(event) => setInvitePassword(event.target.value)}
+          placeholder="初期パスワード（6文字以上）"
+          type="password"
+          value={invitePassword}
+        />
         <button
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-medium text-white"
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-medium text-white disabled:opacity-50"
+          disabled={!inviteName || !inviteEmail || invitePassword.length < 6}
+          onClick={() => inviteStaff(inviteName, inviteEmail, undefined, invitePassword)}
+          type="button"
+        >
+          <Users size={16} />
+          パスワードで登録
+        </button>
+        <button
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-teal-300 bg-white px-4 text-sm font-medium text-teal-800 disabled:opacity-50"
+          disabled={!inviteName || !inviteEmail}
           onClick={() => inviteStaff(inviteName, inviteEmail)}
           type="button"
         >
           <LogIn size={16} />
-          招待
+          招待メール
         </button>
       </div>
       <div className="grid gap-3">
@@ -1848,6 +1962,27 @@ function StaffManager({ addStaff, deleteStaff, inviteStaff, staff, updateStaff }
               <LogIn size={15} />
               招待
             </button>
+            <div className="flex gap-2 lg:col-span-5">
+              <input
+                autoComplete="new-password"
+                className="h-10 min-w-0 flex-1 rounded-md border border-neutral-300 px-3 text-sm"
+                minLength={6}
+                onChange={(event) =>
+                  setResetPasswords((current) => ({ ...current, [member.id]: event.target.value }))
+                }
+                placeholder="新しいパスワード（6文字以上）"
+                type="password"
+                value={resetPasswords[member.id] ?? ""}
+              />
+              <button
+                className="inline-flex h-10 shrink-0 items-center justify-center rounded-md border border-neutral-300 bg-white px-3 text-sm font-medium disabled:opacity-50"
+                disabled={(resetPasswords[member.id]?.length ?? 0) < 6}
+                onClick={() => resetStaffPassword(member.id, resetPasswords[member.id] ?? "")}
+                type="button"
+              >
+                パスワード再設定
+              </button>
+            </div>
             <div className="flex flex-wrap gap-2 lg:col-span-5">
               {weekdays.map((weekday) => (
                 <label key={weekday} className="inline-flex items-center gap-2 rounded-md border border-neutral-200 px-3 py-2 text-sm">

@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 type InvitePayload = {
   email?: string;
   name?: string;
+  password?: string;
   staffId?: string;
 };
 
@@ -13,10 +14,10 @@ function jsonError(message: string, status = 400) {
 
 const staffSelect = "id,auth_user_id,email,name,note,workdays,min_days,max_days,weekly_days,monthly_max";
 
-async function findUserIdByEmail(adminClient: SupabaseClient, email: string) {
+async function findUserByEmail(adminClient: SupabaseClient, email: string) {
   const { data, error } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 1000 });
   if (error) throw new Error(error.message);
-  return data.users.find((user) => user.email?.toLowerCase() === email.toLowerCase())?.id ?? null;
+  return data.users.find((user) => user.email?.toLowerCase() === email.toLowerCase()) ?? null;
 }
 
 export async function POST(request: Request) {
@@ -43,23 +44,56 @@ export async function POST(request: Request) {
     const payload = (await request.json()) as InvitePayload;
     const email = payload.email?.trim().toLowerCase();
     const name = payload.name?.trim();
+    const password = payload.password?.trim();
     const staffId = payload.staffId?.trim();
     if (!email || !name) return jsonError("スタッフ名とメールアドレスを入力してください。");
+    if (password && password.length < 6) return jsonError("初期パスワードは6文字以上で入力してください。");
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
     let authUserId: string | null = null;
-    const inviteResult = await adminClient.auth.admin.inviteUserByEmail(email, {
-      data: { role: "staff", name },
-    });
-
-    if (inviteResult.error) {
-      authUserId = await findUserIdByEmail(adminClient, email);
-      if (!authUserId) throw new Error(inviteResult.error.message);
+    if (password) {
+      const createResult = await adminClient.auth.admin.createUser({
+        app_metadata: { role: "staff" },
+        email,
+        email_confirm: true,
+        password,
+        user_metadata: { role: "staff", name },
+      });
+      if (createResult.error) {
+        const existingUser = await findUserByEmail(adminClient, email);
+        if (!existingUser) throw new Error(createResult.error.message);
+        if (existingUser.app_metadata?.role === "admin") {
+          return jsonError("管理者ユーザーのメールアドレスはスタッフ登録に使用できません。", 409);
+        }
+        authUserId = existingUser.id;
+        const updateResult = await adminClient.auth.admin.updateUserById(existingUser.id, {
+          app_metadata: { role: "staff" },
+          email,
+          email_confirm: true,
+          password,
+          user_metadata: { role: "staff", name },
+        });
+        if (updateResult.error) throw new Error(updateResult.error.message);
+      } else {
+        authUserId = createResult.data.user?.id ?? null;
+      }
     } else {
-      authUserId = inviteResult.data.user?.id ?? null;
+      const inviteResult = await adminClient.auth.admin.inviteUserByEmail(email, {
+        data: { role: "staff", name },
+      });
+      if (inviteResult.error) {
+        const existingUser = await findUserByEmail(adminClient, email);
+        if (!existingUser) throw new Error(inviteResult.error.message);
+        if (existingUser.app_metadata?.role === "admin") {
+          return jsonError("管理者ユーザーのメールアドレスはスタッフ登録に使用できません。", 409);
+        }
+        authUserId = existingUser.id;
+      } else {
+        authUserId = inviteResult.data.user?.id ?? null;
+      }
     }
 
     if (!authUserId) return jsonError("Authユーザーを作成できませんでした。", 500);
