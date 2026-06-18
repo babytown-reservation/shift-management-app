@@ -12,7 +12,7 @@ function jsonError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
-const staffSelect = "id,auth_user_id,email,name,note,workdays,min_days,max_days,weekly_days,monthly_max";
+const staffSelect = "id,auth_user_id,email,sort_order,name,note,workdays,min_days,max_days,weekly_days,monthly_max";
 
 async function findUserByEmail(adminClient: SupabaseClient, email: string) {
   const { data, error } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 1000 });
@@ -104,12 +104,19 @@ export async function POST(request: Request) {
       name,
     };
 
+    const maxSortOrderResult = staffId
+      ? null
+      : await adminClient.from("staff").select("sort_order").order("sort_order", { ascending: false }).limit(1).maybeSingle();
+    if (maxSortOrderResult?.error) throw new Error(maxSortOrderResult.error.message);
+    const nextSortOrder = (maxSortOrderResult?.data?.sort_order ?? -1) + 1;
+
     const staffResult = staffId
       ? await adminClient.from("staff").update(staffPayload).eq("id", staffId).select(staffSelect).single()
       : await adminClient
           .from("staff")
           .insert({
             ...staffPayload,
+            sort_order: nextSortOrder,
             note: "",
             workdays: [1, 2, 3, 4, 5],
             min_days: 3,
@@ -128,6 +135,7 @@ export async function POST(request: Request) {
         id: staff.id,
         authUserId: staff.auth_user_id,
         email: staff.email,
+        sortOrder: staff.sort_order,
         name: staff.name,
         note: staff.note ?? "",
         workdays: staff.workdays,

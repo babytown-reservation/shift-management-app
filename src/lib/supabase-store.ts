@@ -6,6 +6,7 @@ type StaffRow = {
   id: string;
   auth_user_id: string | null;
   email: string | null;
+  sort_order: number;
   name: string;
   note: string | null;
   workdays: number[];
@@ -55,6 +56,7 @@ function toStaff(row: StaffRow): Staff {
     id: row.id,
     authUserId: row.auth_user_id,
     email: row.email,
+    sortOrder: row.sort_order,
     name: row.name,
     note: row.note ?? "",
     workdays: row.workdays as Weekday[],
@@ -68,6 +70,7 @@ function fromStaff(staff: Staff) {
     id: staff.id,
     auth_user_id: staff.authUserId ?? null,
     email: staff.email ?? null,
+    sort_order: staff.sortOrder,
     name: staff.name,
     note: staff.note,
     workdays: staff.workdays,
@@ -113,7 +116,7 @@ function toShiftStatus(row: ShiftPeriodRow | null): ShiftPeriodStatus {
 
 export async function loadSupabaseStore(client: SupabaseClient, targetMonth: string, scope: LoadScope): Promise<SupabaseStore> {
   const { start, end } = monthRange(targetMonth);
-  const staffSelect = "id,auth_user_id,email,name,note,workdays,min_days,max_days,weekly_days,monthly_max";
+  const staffSelect = "id,auth_user_id,email,sort_order,name,note,workdays,min_days,max_days,weekly_days,monthly_max";
 
   if (scope.role === "staff") {
     const staffResult = await client
@@ -158,7 +161,11 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
   }
 
   const [staffResult, requestsResult, requiredResult, assignmentsResult, shiftPeriodResult] = await Promise.all([
-    client.from("staff").select(staffSelect).order("created_at", { ascending: true }),
+    client
+      .from("staff")
+      .select(staffSelect)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true }),
     client
       .from("time_off_requests")
       .select("staff_id,date,memo,submitted_at")
@@ -214,8 +221,25 @@ export async function upsertShiftPeriodPublication(client: SupabaseClient, targe
   assertResult(error);
 }
 
-export async function upsertStaff(client: SupabaseClient, staff: Staff) {
-  const { error, count } = await client.from("staff").upsert(fromStaff(staff), { count: "exact" });
+export async function upsertStaff(client: SupabaseClient, staff: Staff, includeSortOrder = false) {
+  const payload = fromStaff(staff);
+  const result = includeSortOrder
+    ? await client.from("staff").upsert(payload, { count: "exact" })
+    : await client
+        .from("staff")
+        .update({
+          auth_user_id: payload.auth_user_id,
+          email: payload.email,
+          name: payload.name,
+          note: payload.note,
+          workdays: payload.workdays,
+          min_days: payload.min_days,
+          max_days: payload.max_days,
+          weekly_days: payload.weekly_days,
+          monthly_max: payload.monthly_max,
+        })
+        .eq("id", staff.id);
+  const { error, count } = result;
   console.log("[staff] upsert", {
     count,
     id: staff.id,
@@ -228,6 +252,16 @@ export async function upsertStaff(client: SupabaseClient, staff: Staff) {
 
 export async function deleteStaff(client: SupabaseClient, staffId: string) {
   const { error } = await client.from("staff").delete().eq("id", staffId);
+  assertResult(error);
+}
+
+export async function swapStaffSortOrder(client: SupabaseClient, firstStaff: Staff, secondStaff: Staff) {
+  const { error } = await client.rpc("swap_staff_sort_order", {
+    first_staff_id: firstStaff.id,
+    first_sort_order: secondStaff.sortOrder,
+    second_staff_id: secondStaff.id,
+    second_sort_order: firstStaff.sortOrder,
+  });
   assertResult(error);
 }
 

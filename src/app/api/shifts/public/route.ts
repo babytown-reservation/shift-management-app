@@ -87,7 +87,11 @@ export async function GET(request: Request) {
 
     const { end, start } = getShiftPeriodRange(targetMonth);
     const [allStaffResult, assignmentsResult] = await Promise.all([
-      adminClient.from("staff").select("id,name").order("created_at", { ascending: true }),
+      adminClient
+        .from("staff")
+        .select("id,name")
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true }),
       adminClient
         .from("shift_assignments")
         .select("date,staff_id")

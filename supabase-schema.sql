@@ -2,6 +2,7 @@ create table if not exists public.staff (
   id uuid primary key default gen_random_uuid(),
   auth_user_id uuid unique references auth.users(id) on delete set null,
   email text,
+  sort_order integer not null default 0,
   name text not null,
   note text default '',
   workdays int[] not null default '{1,2,3,4,5}',
@@ -17,6 +18,24 @@ alter table public.staff
 
 alter table public.staff
   add column if not exists email text;
+
+alter table public.staff
+  add column if not exists sort_order integer not null default 0;
+
+with ordered_staff as (
+  select
+    id,
+    row_number() over (order by sort_order, created_at, id) - 1 as normalized_sort_order
+  from public.staff
+)
+update public.staff as staff
+set sort_order = ordered_staff.normalized_sort_order
+from ordered_staff
+where staff.id = ordered_staff.id
+  and staff.sort_order is distinct from ordered_staff.normalized_sort_order;
+
+create index if not exists staff_sort_order_idx
+on public.staff (sort_order, created_at);
 
 alter table public.staff
   add column if not exists min_days int not null default 5;
@@ -142,6 +161,37 @@ as $$
         or lower(coalesce(s.email, '')) = lower(coalesce(auth.jwt() ->> 'email', ''))
       )
   );
+$$;
+
+create or replace function public.swap_staff_sort_order(
+  first_staff_id uuid,
+  first_sort_order integer,
+  second_staff_id uuid,
+  second_sort_order integer
+)
+returns void
+language plpgsql
+security invoker
+as $$
+declare
+  affected_rows integer;
+begin
+  if not public.is_admin() then
+    raise exception 'Only administrators can reorder staff.';
+  end if;
+
+  update public.staff
+  set sort_order = case
+    when id = first_staff_id then first_sort_order
+    when id = second_staff_id then second_sort_order
+  end
+  where id in (first_staff_id, second_staff_id);
+
+  get diagnostics affected_rows = row_count;
+  if affected_rows <> 2 then
+    raise exception 'Staff to reorder was not found.';
+  end if;
+end;
 $$;
 
 drop policy if exists "Admins can manage staff" on public.staff;

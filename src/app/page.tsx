@@ -3,6 +3,8 @@
 import { format } from "date-fns";
 import type { User } from "@supabase/supabase-js";
 import {
+  ArrowDown,
+  ArrowUp,
   CalendarDays,
   Check,
   Download,
@@ -34,6 +36,7 @@ import {
   deleteStaff as deleteSupabaseStaff,
   deleteTimeOffRequest,
   loadSupabaseStore,
+  swapStaffSortOrder,
   upsertRequiredStaff,
   upsertShiftPeriodPublication,
   upsertShiftPeriodStatus,
@@ -72,6 +75,13 @@ function uniqueAssignments(assignments: ShiftAssignment): ShiftAssignment {
 
 function countAssignmentRows(assignments: ShiftAssignment) {
   return Object.values(assignments).reduce((sum, staffIds) => sum + staffIds.length, 0);
+}
+
+function sortStaffIds(staffIds: string[], staff: Staff[]) {
+  const staffOrder = new Map(staff.map((member, index) => [member.id, index]));
+  return [...staffIds].sort(
+    (left, right) => (staffOrder.get(left) ?? Number.MAX_SAFE_INTEGER) - (staffOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
+  );
 }
 
 function getUserRole(user: User | null): UserRole {
@@ -512,7 +522,51 @@ export default function Home() {
     void saveStaff(staffToSave);
   }
 
-  async function saveStaff(staffToSave: Staff) {
+  async function moveStaff(staffId: string, direction: -1 | 1) {
+    if (!canAdmin) {
+      setErrorMessage("管理者のみスタッフの表示順を変更できます。");
+      return;
+    }
+
+    const currentIndex = staff.findIndex((member) => member.id === staffId);
+    const targetIndex = currentIndex + direction;
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= staff.length) return;
+
+    const previousStaff = staff;
+    const currentMember = staff[currentIndex];
+    const targetMember = staff[targetIndex];
+    const nextStaff = [...staff];
+    nextStaff[currentIndex] = { ...targetMember, sortOrder: currentMember.sortOrder };
+    nextStaff[targetIndex] = { ...currentMember, sortOrder: targetMember.sortOrder };
+
+    setStaff(nextStaff);
+    setStaffSaveStatus("saving");
+    setStaffSaveMessage("スタッフの表示順を保存中...");
+    setErrorMessage("");
+
+    if (!supabase) {
+      setStaffSaveStatus("saved");
+      setStaffSaveMessage("スタッフの表示順を保存しました");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await swapStaffSortOrder(supabase, currentMember, targetMember);
+      setStaffSaveStatus("saved");
+      setStaffSaveMessage("スタッフの表示順を保存しました");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "スタッフの表示順を保存できませんでした。";
+      setStaff(previousStaff);
+      setStaffSaveStatus("error");
+      setStaffSaveMessage(`スタッフの表示順保存失敗: ${message}`);
+      setErrorMessage(message);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function saveStaff(staffToSave: Staff, includeSortOrder = false) {
     if (!supabase) {
       setStaffSaveStatus("saved");
       setStaffSaveMessage("スタッフ保存済み");
@@ -525,7 +579,7 @@ export default function Home() {
     setStaffSaveMessage("スタッフ保存中...");
 
     try {
-      await upsertStaff(supabase, staffToSave);
+      await upsertStaff(supabase, staffToSave, includeSortOrder);
       console.log("[staff] saved", {
         id: staffToSave.id,
         monthlyMax: staffToSave.monthlyMax,
@@ -550,10 +604,20 @@ export default function Home() {
       return;
     }
     const id = crypto.randomUUID();
-    const member = { id, authUserId: null, email: null, name: "新規スタッフ", note: "", workdays: [1, 2, 3, 4, 5] as Weekday[], weeklyDays: 3, monthlyMax: 14 };
+    const member = {
+      id,
+      authUserId: null,
+      email: null,
+      sortOrder: Math.max(-1, ...staff.map((item) => item.sortOrder)) + 1,
+      name: "新規スタッフ",
+      note: "",
+      workdays: [1, 2, 3, 4, 5] as Weekday[],
+      weeklyDays: 3,
+      monthlyMax: 14,
+    };
     setStaff((current) => [...current, member]);
     setActiveStaffId(id);
-    void saveStaff(member);
+    void saveStaff(member, true);
   }
 
   function deleteStaff(staffId: string) {
@@ -1252,6 +1316,7 @@ export default function Home() {
           monthDates={monthDates}
           monthRequests={monthRequests}
           moveDraggedStaff={moveDraggedStaff}
+          moveStaff={moveStaff}
           required={required}
           resetStaffPassword={resetStaffPassword}
           setActiveTab={setAdminTab}
@@ -1753,6 +1818,7 @@ function AdminView(props: {
   monthDates: Date[];
   monthRequests: TimeOffRequest[];
   moveDraggedStaff: (dateKey: string) => void;
+  moveStaff: (staffId: string, direction: -1 | 1) => void;
   renderedDateRangeLabel: string;
   required: RequiredStaff;
   resetStaffPassword: (staffId: string, password: string) => void;
@@ -1866,6 +1932,7 @@ function StaffManager({
   addStaff,
   deleteStaff,
   inviteStaff,
+  moveStaff,
   resetStaffPassword,
   staff,
   updateStaff,
@@ -1927,7 +1994,7 @@ function StaffManager({
         </button>
       </div>
       <div className="grid gap-3">
-        {staff.map((member) => (
+        {staff.map((member, index) => (
           <div key={member.id} className="grid gap-3 rounded-lg border border-neutral-200 p-3 lg:grid-cols-[1fr_1fr_150px_150px_44px]">
             <input className="h-10 rounded-md border border-neutral-300 px-3" value={member.name} onChange={(event) => updateStaff(member.id, { name: event.target.value })} />
             <input className="h-10 rounded-md border border-neutral-300 px-3" placeholder="備考" value={member.note} onChange={(event) => updateStaff(member.id, { note: event.target.value })} />
@@ -1941,6 +2008,29 @@ function StaffManager({
             >
               <Trash2 size={16} />
             </button>
+            <div className="flex gap-2 lg:col-span-5">
+              <button
+                aria-label={`${member.name}を1つ上へ移動`}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-neutral-300 bg-white px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={index === 0}
+                onClick={() => moveStaff(member.id, -1)}
+                type="button"
+              >
+                <ArrowUp size={16} />
+                ↑
+              </button>
+              <button
+                aria-label={`${member.name}を1つ下へ移動`}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-neutral-300 bg-white px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={index === staff.length - 1}
+                onClick={() => moveStaff(member.id, 1)}
+                type="button"
+              >
+                <ArrowDown size={16} />
+                ↓
+              </button>
+              <span className="self-center text-sm text-neutral-500">表示順: {index + 1}</span>
+            </div>
             <input
               className="h-10 rounded-md border border-neutral-300 px-3 text-sm lg:col-span-2"
               onChange={(event) => updateStaff(member.id, { email: event.target.value || null })}
@@ -2250,7 +2340,7 @@ function ShiftEditor({
                     }}
                   >
                     <div className="flex min-h-9 flex-wrap gap-2">
-                      {(assignments[key] ?? []).map((staffId) => (
+                      {sortStaffIds(assignments[key] ?? [], staff).map((staffId) => (
                         <span
                           key={staffId}
                           className={classNames("cursor-grab rounded-md bg-emerald-100 px-2 py-1 text-emerald-900", dragStaffId === staffId && "opacity-50")}

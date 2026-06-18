@@ -5,6 +5,7 @@ import type { ShiftAssignment, Staff } from "./types";
 
 export function downloadShiftWorkbook(targetMonth: string, staff: Staff[], assignments: ShiftAssignment) {
   const dates = getMonthDates(targetMonth);
+  const sortedStaff = [...staff].sort((left, right) => left.sortOrder - right.sortOrder);
   const monthDegreeLabel = getMonthDegreeLabel(targetMonth);
   const targetPeriodLabel = getShiftPeriodLabel(targetMonth);
   const lastColumnIndex = dates.length + 1;
@@ -16,7 +17,7 @@ export function downloadShiftWorkbook(targetMonth: string, staff: Staff[], assig
     [`対象期間：${targetPeriodLabel}`, ...Array.from({ length: dates.length + 1 }, () => "")],
     ["氏名", ...dates.map((date) => date.getDate()), "合計"],
     ["曜日", ...dates.map((date) => weekdayLabels[date.getDay()]), ""],
-    ...staff.map((member) => [
+    ...sortedStaff.map((member) => [
       member.name,
       ...dates.map((date) => (assignments[toDateKey(date)]?.includes(member.id) ? "○" : "")),
       dates.filter((date) => assignments[toDateKey(date)]?.includes(member.id)).length,

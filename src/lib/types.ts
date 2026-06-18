@@ -4,6 +4,7 @@ export type Staff = {
   id: string;
   authUserId?: string | null;
   email?: string | null;
+  sortOrder: number;
   name: string;
   note: string;
   workdays: Weekday[];
