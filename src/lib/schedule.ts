@@ -1,10 +1,18 @@
 import { getMonthDates, getWeekOfShiftPeriod, getWeekday, toDateKey } from "./date-utils";
 import { isClosedDay } from "./holidays";
-import type { RequiredStaff, ShiftResult, Staff, TimeOffRequest } from "./types";
+import type { RequiredStaff, ShiftResult, Staff, TimeOffRequest, Weekday } from "./types";
 
 function requestKey(staffId: string, date: string) {
   return `${staffId}:${date}`;
 }
+
+type ShiftDay = {
+  dateKey: string;
+  needed: number;
+  order: number;
+  week: number;
+  weekday: Weekday;
+};
 
 export function generateShift(
   targetMonth: string,
@@ -16,55 +24,97 @@ export function generateShift(
   const monthCounts = new Map(staff.map((member) => [member.id, 0]));
   const weekCounts = new Map(staff.map((member) => [member.id, new Map<number, number>()]));
   const weekdayCounts = new Map(staff.map((member) => [member.id, new Map<number, number>()]));
+  const staffOrder = new Map(staff.map((member, index) => [member.id, index]));
   const assignments: Record<string, string[]> = {};
-  const issues = [];
+  const shiftDays: ShiftDay[] = [];
 
-  for (const date of getMonthDates(targetMonth)) {
+  getMonthDates(targetMonth).forEach((date, order) => {
     const dateKey = toDateKey(date);
+    assignments[dateKey] = [];
     if (isClosedDay(date)) {
-      assignments[dateKey] = [];
-      continue;
+      return;
     }
 
-    const weekday = getWeekday(date);
-    const week = getWeekOfShiftPeriod(date, targetMonth);
-    const needed = required[dateKey] ?? 0;
-    const eligible = staff
-      .filter((member) => {
-        const monthly = monthCounts.get(member.id) ?? 0;
-        const weekly = weekCounts.get(member.id)?.get(week) ?? 0;
-        return (
-          member.workdays.includes(weekday) &&
-          monthly < member.monthlyMax &&
-          weekly < member.weeklyDays &&
-          !requestSet.has(requestKey(member.id, dateKey))
-        );
-      })
+    shiftDays.push({
+      dateKey,
+      needed: Math.max(0, required[dateKey] ?? 0),
+      order,
+      week: getWeekOfShiftPeriod(date, targetMonth),
+      weekday: getWeekday(date),
+    });
+  });
+
+  function getEligibleStaff(day: ShiftDay) {
+    const assignedIds = new Set(assignments[day.dateKey]);
+    return staff.filter((member) => {
+      const monthly = monthCounts.get(member.id) ?? 0;
+      const weekly = weekCounts.get(member.id)?.get(day.week) ?? 0;
+      return (
+        !assignedIds.has(member.id) &&
+        member.workdays.includes(day.weekday) &&
+        monthly < member.monthlyMax &&
+        weekly < member.weeklyDays &&
+        !requestSet.has(requestKey(member.id, day.dateKey))
+      );
+    });
+  }
+
+  while (true) {
+    const availableDays = shiftDays
+      .map((day) => ({ day, eligible: getEligibleStaff(day) }))
+      .filter(({ day, eligible }) => assignments[day.dateKey].length < day.needed && eligible.length > 0)
       .sort((left, right) => {
-        const leftMonth = monthCounts.get(left.id) ?? 0;
-        const rightMonth = monthCounts.get(right.id) ?? 0;
-        const leftWeek = weekCounts.get(left.id)?.get(week) ?? 0;
-        const rightWeek = weekCounts.get(right.id)?.get(week) ?? 0;
-        const leftSameWeekday = weekdayCounts.get(left.id)?.get(weekday) ?? 0;
-        const rightSameWeekday = weekdayCounts.get(right.id)?.get(weekday) ?? 0;
-        return leftMonth - rightMonth || leftWeek - rightWeek || leftSameWeekday - rightSameWeekday;
+        const leftAssigned = assignments[left.day.dateKey].length;
+        const rightAssigned = assignments[right.day.dateKey].length;
+        const leftRatio = left.day.needed > 0 ? leftAssigned / left.day.needed : 1;
+        const rightRatio = right.day.needed > 0 ? rightAssigned / right.day.needed : 1;
+        return (
+          leftAssigned - rightAssigned ||
+          leftRatio - rightRatio ||
+          left.eligible.length - right.eligible.length ||
+          left.day.order - right.day.order
+        );
       });
 
-    const selected = eligible.slice(0, needed);
-    assignments[dateKey] = selected.map((member) => member.id);
+    const selectedDay = availableDays[0];
+    if (!selectedDay) break;
 
-    for (const member of selected) {
-      monthCounts.set(member.id, (monthCounts.get(member.id) ?? 0) + 1);
-      const weeks = weekCounts.get(member.id);
-      weeks?.set(week, (weeks.get(week) ?? 0) + 1);
-      const weekdays = weekdayCounts.get(member.id);
-      weekdays?.set(weekday, (weekdays.get(weekday) ?? 0) + 1);
-    }
+    const currentDayCount = assignments[selectedDay.day.dateKey].length;
+    const selectedStaff = selectedDay.eligible.sort((left, right) => {
+      const leftMonth = monthCounts.get(left.id) ?? 0;
+      const rightMonth = monthCounts.get(right.id) ?? 0;
+      const leftWeek = weekCounts.get(left.id)?.get(selectedDay.day.week) ?? 0;
+      const rightWeek = weekCounts.get(right.id)?.get(selectedDay.day.week) ?? 0;
+      const leftSameWeekday = weekdayCounts.get(left.id)?.get(selectedDay.day.weekday) ?? 0;
+      const rightSameWeekday = weekdayCounts.get(right.id)?.get(selectedDay.day.weekday) ?? 0;
+      const rotationStart = (selectedDay.day.order + currentDayCount) % Math.max(staff.length, 1);
+      const leftRotation = ((staffOrder.get(left.id) ?? 0) - rotationStart + staff.length) % Math.max(staff.length, 1);
+      const rightRotation = ((staffOrder.get(right.id) ?? 0) - rotationStart + staff.length) % Math.max(staff.length, 1);
+      return (
+        leftMonth - rightMonth ||
+        leftWeek - rightWeek ||
+        leftSameWeekday - rightSameWeekday ||
+        leftRotation - rightRotation
+      );
+    })[0];
 
-    if (selected.length < needed) {
-      issues.push({ date: dateKey, required: needed, assigned: selected.length });
-    }
+    if (!selectedStaff) break;
+
+    assignments[selectedDay.day.dateKey].push(selectedStaff.id);
+    monthCounts.set(selectedStaff.id, (monthCounts.get(selectedStaff.id) ?? 0) + 1);
+    const weeks = weekCounts.get(selectedStaff.id);
+    weeks?.set(selectedDay.day.week, (weeks.get(selectedDay.day.week) ?? 0) + 1);
+    const weekdays = weekdayCounts.get(selectedStaff.id);
+    weekdays?.set(selectedDay.day.weekday, (weekdays.get(selectedDay.day.weekday) ?? 0) + 1);
   }
+
+  const issues = shiftDays
+    .filter((day) => assignments[day.dateKey].length < day.needed)
+    .map((day) => ({
+      date: day.dateKey,
+      required: day.needed,
+      assigned: assignments[day.dateKey].length,
+    }));
 
   return { assignments, issues };
 }
