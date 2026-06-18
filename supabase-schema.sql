@@ -52,9 +52,13 @@ create table if not exists public.shift_periods (
   id uuid primary key default gen_random_uuid(),
   target_month text not null unique,
   status text not null default 'draft' check (status in ('draft', 'confirmed')),
+  is_published boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.shift_periods
+  add column if not exists is_published boolean not null default false;
 
 create table if not exists public.shift_assignments (
   id uuid primary key default gen_random_uuid(),

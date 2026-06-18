@@ -33,6 +33,7 @@ type AssignmentRow = {
 };
 
 type ShiftPeriodRow = {
+  is_published: boolean | null;
   status: ShiftPeriodStatus;
 };
 
@@ -41,6 +42,7 @@ export type SupabaseStore = {
   requests: TimeOffRequest[];
   required: RequiredStaff;
   assignments: ShiftAssignment;
+  shiftPublished: boolean;
   shiftStatus: ShiftPeriodStatus;
 };
 
@@ -124,7 +126,7 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
     const staff = staffResult.data ? [toStaff(staffResult.data as StaffRow)] : [];
     const staffId = staff[0]?.id;
     if (!staffId) {
-      return { staff: [], requests: [], required: {}, assignments: {}, shiftStatus: "draft" };
+      return { staff: [], requests: [], required: {}, assignments: {}, shiftPublished: false, shiftStatus: "draft" };
     }
 
     const [requestsResult, assignmentsResult] = await Promise.all([
@@ -150,6 +152,7 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
       requests: (requestsResult.data ?? []).map((row) => toRequest(row as TimeOffRow)),
       required: {},
       assignments: toAssignments((assignmentsResult.data ?? []) as AssignmentRow[]),
+      shiftPublished: false,
       shiftStatus: "draft",
     };
   }
@@ -164,7 +167,7 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
       .order("date", { ascending: true }),
     client.from("required_staff").select("date,required_count").gte("date", start).lte("date", end),
     client.from("shift_assignments").select("date,staff_id").gte("date", start).lte("date", end),
-    client.from("shift_periods").select("status").eq("target_month", targetMonth).maybeSingle(),
+    client.from("shift_periods").select("status,is_published").eq("target_month", targetMonth).maybeSingle(),
   ]);
 
   assertResult(staffResult.error);
@@ -182,6 +185,7 @@ export async function loadSupabaseStore(client: SupabaseClient, targetMonth: str
     requests: (requestsResult.data ?? []).map((row) => toRequest(row as TimeOffRow)),
     required: toRequired((requiredResult.data ?? []) as RequiredRow[]),
     assignments: toAssignments((assignmentsResult.data ?? []) as AssignmentRow[]),
+    shiftPublished: Boolean((shiftPeriodResult.data as ShiftPeriodRow | null)?.is_published),
     shiftStatus: toShiftStatus(shiftPeriodResult.data as ShiftPeriodRow | null),
   };
 }
@@ -190,6 +194,18 @@ export async function upsertShiftPeriodStatus(client: SupabaseClient, targetMont
   const { error } = await client.from("shift_periods").upsert(
     {
       status,
+      target_month: targetMonth,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "target_month" },
+  );
+  assertResult(error);
+}
+
+export async function upsertShiftPeriodPublication(client: SupabaseClient, targetMonth: string, isPublished: boolean) {
+  const { error } = await client.from("shift_periods").upsert(
+    {
+      is_published: isPublished,
       target_month: targetMonth,
       updated_at: new Date().toISOString(),
     },

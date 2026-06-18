@@ -35,11 +35,20 @@ import {
   deleteTimeOffRequest,
   loadSupabaseStore,
   upsertRequiredStaff,
+  upsertShiftPeriodPublication,
   upsertShiftPeriodStatus,
   upsertStaff,
   upsertTimeOffRequest,
 } from "@/lib/supabase-store";
-import type { RequiredStaff, ShiftAssignment, ShiftPeriodStatus, Staff, TimeOffRequest, Weekday } from "@/lib/types";
+import type {
+  PublishedShiftStaff,
+  RequiredStaff,
+  ShiftAssignment,
+  ShiftPeriodStatus,
+  Staff,
+  TimeOffRequest,
+  Weekday,
+} from "@/lib/types";
 
 const weekdays: Weekday[] = [1, 2, 3, 4, 5];
 const tabs = ["dashboard", "staff", "required", "requests", "shift"] as const;
@@ -88,6 +97,10 @@ export default function Home() {
   const [required, setRequired] = useState<RequiredStaff>(initialRequiredStaff);
   const [assignments, setAssignments] = useState<ShiftAssignment>({});
   const [shiftStatus, setShiftStatus] = useState<ShiftPeriodStatus>("draft");
+  const [isShiftPublished, setIsShiftPublished] = useState(false);
+  const [publishedAssignments, setPublishedAssignments] = useState<ShiftAssignment>({});
+  const [publishedStaff, setPublishedStaff] = useState<PublishedShiftStaff[]>([]);
+  const [isPublishedShiftLoading, setIsPublishedShiftLoading] = useState(false);
   const [savingAssignmentDates, setSavingAssignmentDates] = useState<string[]>([]);
   const [dragStaffId, setDragStaffId] = useState<string | null>(null);
   const [bulkValue, setBulkValue] = useState(3);
@@ -216,6 +229,9 @@ export default function Home() {
         setRequired(initialRequiredStaff);
         setAssignments({});
         setShiftStatus("draft");
+        setIsShiftPublished(false);
+        setPublishedAssignments({});
+        setPublishedStaff([]);
       }
     });
 
@@ -298,6 +314,13 @@ export default function Home() {
         });
         setAssignments(loadedAssignments);
         setShiftStatus(store.shiftStatus);
+        if (authRole === "admin") {
+          setIsShiftPublished(store.shiftPublished);
+          setPublishedAssignments({});
+          setPublishedStaff([]);
+        } else {
+          await fetchPublishedShift();
+        }
         setActiveStaffId((current) => (store.staff.some((member) => member.id === current) ? current : (store.staff[0]?.id ?? "")));
         if (authRole === "staff" && store.staff.length === 0) {
           setErrorMessage("ログイン中のメールアドレスに紐づくスタッフ情報がありません。管理者にスタッフ招待またはメール登録を依頼してください。");
@@ -314,6 +337,8 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
+    // fetchPublishedShift is declared in component scope and uses the same targetMonth/supabase dependencies.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authRole, authUser, isAuthReady, supabase, targetMonth]);
 
   function toggleRequest(dateKey: string) {
@@ -590,6 +615,35 @@ export default function Home() {
     }
   }
 
+  async function updateShiftPublication(nextPublished: boolean) {
+    if (!canAdmin) {
+      setErrorMessage("管理者のみシフト公開状態を変更できます。");
+      return;
+    }
+    if (nextPublished && !isShiftConfirmed) {
+      setErrorMessage("シフトを確定してから公開してください。");
+      return;
+    }
+
+    const message = nextPublished ? "この月度のシフトを公開しますか？" : "この月度のシフトを非公開にしますか？";
+    if (!window.confirm(message)) return;
+
+    const previousPublished = isShiftPublished;
+    setIsShiftPublished(nextPublished);
+    setIsSaving(true);
+    setErrorMessage("");
+    try {
+      if (supabase) {
+        await upsertShiftPeriodPublication(supabase, targetMonth, nextPublished);
+      }
+    } catch (error) {
+      setIsShiftPublished(previousPublished);
+      setErrorMessage(error instanceof Error ? error.message : "シフト公開状態の保存に失敗しました。");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function inviteStaff(name: string, email: string, staffId?: string) {
     if (!supabase || !canAdmin) {
       setErrorMessage("管理者のみスタッフを招待できます。");
@@ -650,6 +704,35 @@ export default function Home() {
     }
 
     return token;
+  }
+
+  async function fetchPublishedShift() {
+    if (!supabase) {
+      setIsShiftPublished(false);
+      setPublishedAssignments({});
+      setPublishedStaff([]);
+      return;
+    }
+
+    setIsPublishedShiftLoading(true);
+    try {
+      const token = await getCurrentAccessToken();
+      const response = await fetch(`/api/shifts/public?targetMonth=${encodeURIComponent(targetMonth)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const result = (await response.json()) as {
+        assignments?: ShiftAssignment;
+        error?: string;
+        published?: boolean;
+        staff?: PublishedShiftStaff[];
+      };
+      if (!response.ok) throw new Error(result.error ?? "公開シフトを取得できませんでした。");
+      setIsShiftPublished(Boolean(result.published));
+      setPublishedAssignments(uniqueAssignments(result.assignments ?? {}));
+      setPublishedStaff(result.staff ?? []);
+    } finally {
+      setIsPublishedShiftLoading(false);
+    }
   }
 
   async function fetchSavedShiftAssignments() {
@@ -1072,7 +1155,11 @@ export default function Home() {
           activeStaff={activeStaff}
           assignments={assignments}
           canSwitchStaff={canAdmin}
+          isPublishedShiftLoading={isPublishedShiftLoading}
+          isShiftPublished={isShiftPublished}
           monthDates={monthDates}
+          publishedAssignments={publishedAssignments}
+          publishedStaff={publishedStaff}
           renderedDateRangeLabel={renderedDateRangeLabel}
           targetPeriodLabel={targetPeriodLabel}
           requestSaveMessage={requestSaveMessage}
@@ -1098,6 +1185,7 @@ export default function Home() {
           inviteStaff={inviteStaff}
           isGeneratingShift={isGeneratingShift}
           isLoading={isLoading}
+          isShiftPublished={isShiftPublished}
           isShiftConfirmed={isShiftConfirmed}
           monthDates={monthDates}
           monthRequests={monthRequests}
@@ -1120,6 +1208,7 @@ export default function Home() {
           renderedDateRangeLabel={renderedDateRangeLabel}
           toggleAssignment={toggleAssignment}
           updateShiftStatus={updateShiftStatus}
+          updateShiftPublication={updateShiftPublication}
           updateRequiredForDate={updateRequiredForDate}
           updateStaff={updateStaff}
         />
@@ -1264,7 +1353,11 @@ function StaffView({
   activeStaff,
   assignments,
   canSwitchStaff,
+  isPublishedShiftLoading,
+  isShiftPublished,
   monthDates,
+  publishedAssignments,
+  publishedStaff,
   renderedDateRangeLabel,
   targetPeriodLabel,
   requestSaveMessage,
@@ -1279,7 +1372,11 @@ function StaffView({
   activeStaff?: Staff;
   assignments: ShiftAssignment;
   canSwitchStaff: boolean;
+  isPublishedShiftLoading: boolean;
+  isShiftPublished: boolean;
   monthDates: Date[];
+  publishedAssignments: ShiftAssignment;
+  publishedStaff: PublishedShiftStaff[];
   renderedDateRangeLabel: string;
   targetPeriodLabel: string;
   requestSaveMessage: string;
@@ -1294,6 +1391,8 @@ function StaffView({
   const ownRequests = requests.filter(
     (request) => request.staffId === activeStaff?.id && isDateInShiftPeriod(request.date, targetMonth),
   );
+  const visibleAssignments = canSwitchStaff ? assignments : publishedAssignments;
+  const visibleStaff = canSwitchStaff ? staff : publishedStaff;
 
   return (
     <section className="mx-auto grid max-w-7xl gap-4 px-4 py-5 sm:px-6 lg:grid-cols-[280px_1fr]">
@@ -1331,7 +1430,7 @@ function StaffView({
 
       <div className="space-y-4">
         <CalendarGrid
-          assignments={assignments}
+          assignments={isShiftPublished ? visibleAssignments : {}}
           monthDates={monthDates}
           renderedDateRangeLabel={renderedDateRangeLabel}
           targetPeriodLabel={targetPeriodLabel}
@@ -1343,19 +1442,112 @@ function StaffView({
           requestSaveMessage={requestSaveMessage}
           requestSaveStatus={requestSaveStatus}
         />
-        <section className="rounded-lg border border-neutral-200 bg-white p-4">
-          <h2 className="text-lg font-semibold">確定シフト</h2>
-          <p className="mt-1 text-sm font-medium text-neutral-700">表示日付：{renderedDateRangeLabel}</p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {monthDates
-              .filter((date) => assignments[toDateKey(date)]?.includes(activeStaff?.id ?? ""))
-              .map((date) => (
-                <div key={toDateKey(date)} className="rounded-md border border-neutral-200 px-3 py-2 text-sm">
-                  {format(date, "M/d")}（{weekdayLabels[date.getDay()]}）
-                </div>
+        <PublishedShiftTable
+          assignments={visibleAssignments}
+          isLoading={isPublishedShiftLoading}
+          isPublished={isShiftPublished}
+          monthDates={monthDates}
+          staff={visibleStaff}
+          targetPeriodLabel={targetPeriodLabel}
+        />
+      </div>
+    </section>
+  );
+}
+
+function PublishedShiftTable({
+  assignments,
+  isLoading,
+  isPublished,
+  monthDates,
+  staff,
+  targetPeriodLabel,
+}: {
+  assignments: ShiftAssignment;
+  isLoading: boolean;
+  isPublished: boolean;
+  monthDates: Date[];
+  staff: PublishedShiftStaff[];
+  targetPeriodLabel: string;
+}) {
+  if (isLoading) {
+    return (
+      <section className="rounded-lg border border-neutral-200 bg-white p-4">
+        <h2 className="text-lg font-semibold">公開シフト</h2>
+        <p className="mt-2 text-sm text-neutral-600">公開状況を確認しています...</p>
+      </section>
+    );
+  }
+
+  if (!isPublished) {
+    return (
+      <section className="rounded-lg border border-neutral-200 bg-white p-4">
+        <h2 className="text-lg font-semibold">公開シフト</h2>
+        <p className="mt-2 text-sm text-neutral-600">この月度のシフトはまだ公開されていません。</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-lg border border-neutral-200 bg-white p-4">
+      <h2 className="text-lg font-semibold">公開シフト</h2>
+      <p className="mt-1 text-sm font-medium text-neutral-700">対象期間：{targetPeriodLabel}</p>
+      <div className="mt-3 overflow-x-auto">
+        <table className="min-w-max border-collapse text-center text-xs">
+          <thead>
+            <tr>
+              <th className="sticky left-0 z-20 min-w-32 border border-neutral-300 bg-white px-3 py-2 text-left">スタッフ名</th>
+              {monthDates.map((date) => (
+                <th
+                  key={toDateKey(date)}
+                  className={classNames(
+                    "min-w-10 border border-neutral-300 px-2 py-2 font-semibold",
+                    isClosedDay(date) ? "bg-neutral-100 text-neutral-500" : "bg-teal-50",
+                  )}
+                >
+                  {date.getDate()}
+                </th>
               ))}
-          </div>
-        </section>
+            </tr>
+            <tr>
+              <th className="sticky left-0 z-20 border border-neutral-300 bg-white px-3 py-2 text-left">曜日</th>
+              {monthDates.map((date) => (
+                <th
+                  key={toDateKey(date)}
+                  className={classNames(
+                    "border border-neutral-300 px-2 py-2",
+                    isClosedDay(date) ? "bg-neutral-100 text-neutral-500" : "bg-teal-50",
+                  )}
+                >
+                  {weekdayLabels[date.getDay()]}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {staff.map((member) => (
+              <tr key={member.id}>
+                <th className="sticky left-0 z-10 border border-neutral-300 bg-white px-3 py-2 text-left font-medium">
+                  {member.name}
+                </th>
+                {monthDates.map((date) => {
+                  const dateKey = toDateKey(date);
+                  return (
+                    <td
+                      key={dateKey}
+                      className={classNames(
+                        "border border-neutral-300 px-2 py-2 text-sm font-semibold",
+                        isClosedDay(date) && "bg-neutral-100 text-neutral-500",
+                      )}
+                    >
+                      {assignments[dateKey]?.includes(member.id) ? "○" : ""}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </section>
   );
@@ -1471,6 +1663,7 @@ function AdminView(props: {
   inviteStaff: (name: string, email: string, staffId?: string) => void;
   isGeneratingShift: boolean;
   isLoading: boolean;
+  isShiftPublished: boolean;
   isShiftConfirmed: boolean;
   monthDates: Date[];
   monthRequests: TimeOffRequest[];
@@ -1492,6 +1685,7 @@ function AdminView(props: {
   targetMonth: string;
   targetPeriodLabel: string;
   toggleAssignment: (dateKey: string, staffId: string) => void;
+  updateShiftPublication: (published: boolean) => void;
   updateShiftStatus: (status: ShiftPeriodStatus) => void;
   updateRequiredForDate: (dateKey: string, count: number) => void;
   updateStaff: (staffId: string, patch: Partial<Staff>) => void;
@@ -1783,6 +1977,7 @@ function ShiftEditor({
   dragStaffId,
   isGeneratingShift,
   isShiftConfirmed,
+  isShiftPublished,
   monthDates,
   moveDraggedStaff,
   renderedDateRangeLabel,
@@ -1798,6 +1993,7 @@ function ShiftEditor({
   targetMonth,
   targetPeriodLabel,
   toggleAssignment,
+  updateShiftPublication,
   updateShiftStatus,
 }: Parameters<typeof AdminView>[0]) {
   return (
@@ -1835,6 +2031,32 @@ function ShiftEditor({
             type="button"
           >
             確定解除
+          </button>
+        )}
+        <span
+          className={classNames(
+            "rounded-md px-3 py-2 text-sm font-semibold",
+            isShiftPublished ? "bg-sky-50 text-sky-800" : "bg-neutral-100 text-neutral-700",
+          )}
+        >
+          公開: {isShiftPublished ? "公開中" : "非公開"}
+        </span>
+        {isShiftPublished ? (
+          <button
+            className="inline-flex h-10 items-center rounded-md border border-neutral-300 bg-white px-3 text-sm font-medium"
+            onClick={() => updateShiftPublication(false)}
+            type="button"
+          >
+            非公開にする
+          </button>
+        ) : (
+          <button
+            className="inline-flex h-10 items-center rounded-md bg-sky-700 px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!isShiftConfirmed}
+            onClick={() => updateShiftPublication(true)}
+            type="button"
+          >
+            シフト公開
           </button>
         )}
       </div>
