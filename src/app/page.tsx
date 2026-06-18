@@ -19,8 +19,10 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getDefaultTargetMonth,
+  getCurrentShiftMonth,
   getMonthDates,
   getMonthDegreeLabel,
+  getNextRequestShiftMonth,
   getShiftPeriodLabel,
   getWeekday,
   isDateInShiftPeriod,
@@ -102,6 +104,8 @@ export default function Home() {
   const [mode, setMode] = useState<"staff" | "admin">("staff");
   const [adminTab, setAdminTab] = useState<AdminTab>("dashboard");
   const [targetMonth, setTargetMonth] = useState(getDefaultTargetMonth(new Date()));
+  const [staffRequestMonth] = useState(getNextRequestShiftMonth(new Date()));
+  const [publishedShiftMonth] = useState(getCurrentShiftMonth(new Date()));
   const [staff, setStaff] = useState<Staff[]>(initialStaff);
   const [activeStaffId, setActiveStaffId] = useState(initialStaff[0]?.id ?? "");
   const [requests, setRequests] = useState<TimeOffRequest[]>(initialRequests);
@@ -142,6 +146,16 @@ export default function Home() {
     return `${format(monthDates[0], "yyyy/M/d")}〜${format(monthDates[monthDates.length - 1], "yyyy/M/d")}`;
   }, [monthDates, targetPeriodLabel]);
   const monthDegreeLabel = useMemo(() => getMonthDegreeLabel(targetMonth), [targetMonth]);
+  const staffRequestDates = useMemo(() => getMonthDates(staffRequestMonth), [staffRequestMonth]);
+  const staffRequestPeriodLabel = useMemo(() => getShiftPeriodLabel(staffRequestMonth), [staffRequestMonth]);
+  const staffRequestDegreeLabel = useMemo(() => getMonthDegreeLabel(staffRequestMonth), [staffRequestMonth]);
+  const staffRequestDateRangeLabel = useMemo(() => {
+    if (!staffRequestDates.length) return staffRequestPeriodLabel;
+    return `${format(staffRequestDates[0], "yyyy/M/d")}〜${format(staffRequestDates[staffRequestDates.length - 1], "yyyy/M/d")}`;
+  }, [staffRequestDates, staffRequestPeriodLabel]);
+  const publishedShiftDates = useMemo(() => getMonthDates(publishedShiftMonth), [publishedShiftMonth]);
+  const publishedShiftPeriodLabel = useMemo(() => getShiftPeriodLabel(publishedShiftMonth), [publishedShiftMonth]);
+  const publishedShiftDegreeLabel = useMemo(() => getMonthDegreeLabel(publishedShiftMonth), [publishedShiftMonth]);
   const activeStaff = staff.find((member) => member.id === activeStaffId) ?? staff[0];
   const monthRequests = requests.filter((request) => isDateInShiftPeriod(request.date, targetMonth));
   const shiftIssues = useMemo(() => {
@@ -269,7 +283,9 @@ export default function Home() {
       queueMicrotask(() => setMode("staff"));
     }
 
-    loadSupabaseStore(supabase, targetMonth, scope)
+    const loadTargetMonth = authRole === "admin" ? targetMonth : staffRequestMonth;
+
+    loadSupabaseStore(supabase, loadTargetMonth, scope)
       .then(async (store) => {
         if (cancelled) return;
         let loadedAssignments = store.assignments;
@@ -330,7 +346,7 @@ export default function Home() {
           setPublishedAssignments({});
           setPublishedStaff([]);
         } else {
-          await fetchPublishedShift();
+          await fetchPublishedShift(publishedShiftMonth);
         }
         setActiveStaffId((current) => (store.staff.some((member) => member.id === current) ? current : (store.staff[0]?.id ?? "")));
         if (authRole === "staff" && store.staff.length === 0) {
@@ -348,9 +364,9 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-    // fetchPublishedShift is declared in component scope and uses the same targetMonth/supabase dependencies.
+    // fetchPublishedShift is declared in component scope and receives the staff publication month explicitly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authRole, authUser, isAuthReady, supabase, targetMonth]);
+  }, [authRole, authUser, isAuthReady, publishedShiftMonth, staffRequestMonth, supabase, targetMonth]);
 
   function toggleRequest(dateKey: string) {
     if (!activeStaff) return;
@@ -801,7 +817,7 @@ export default function Home() {
     return token;
   }
 
-  async function fetchPublishedShift() {
+  async function fetchPublishedShift(targetPublishedMonth: string) {
     if (!supabase) {
       setIsShiftPublished(false);
       setPublishedAssignments({});
@@ -812,7 +828,7 @@ export default function Home() {
     setIsPublishedShiftLoading(true);
     try {
       const token = await getCurrentAccessToken();
-      const response = await fetch(`/api/shifts/public?targetMonth=${encodeURIComponent(targetMonth)}`, {
+      const response = await fetch(`/api/shifts/public?targetMonth=${encodeURIComponent(targetPublishedMonth)}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const result = (await response.json()) as {
@@ -1182,7 +1198,9 @@ export default function Home() {
             <p className="text-sm font-medium text-teal-700">Next.js + Supabase + Vercel MVP</p>
             <h1 className="text-2xl font-semibold">シフト管理</h1>
             <p className="mt-1 text-sm text-neutral-600">
-              {monthDegreeLabel} / 対象期間：{targetPeriodLabel}
+              {canAdmin
+                ? `${monthDegreeLabel} / 対象期間：${targetPeriodLabel}`
+                : `希望休提出：${staffRequestDegreeLabel} / 公開シフト：${publishedShiftDegreeLabel}`}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1191,14 +1209,18 @@ export default function Home() {
                 {authRole === "admin" ? "管理者" : "スタッフ"}: {authUser.email}
               </span>
             ) : null}
-            <span className="text-sm font-medium text-neutral-700">月度</span>
-            <input
-              aria-label="対象月度"
-              className="h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
-              type="month"
-              value={targetMonth}
-              onChange={(event) => setTargetMonth(event.target.value)}
-            />
+            {canAdmin ? (
+              <>
+                <span className="text-sm font-medium text-neutral-700">月度</span>
+                <input
+                  aria-label="対象月度"
+                  className="h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+                  type="month"
+                  value={targetMonth}
+                  onChange={(event) => setTargetMonth(event.target.value)}
+                />
+              </>
+            ) : null}
             <button
               className={classNames(
                 "inline-flex h-10 items-center gap-2 rounded-md px-3 text-sm font-medium",
@@ -1283,17 +1305,21 @@ export default function Home() {
           canSwitchStaff={canAdmin}
           isPublishedShiftLoading={isPublishedShiftLoading}
           isShiftPublished={isShiftPublished}
-          monthDates={monthDates}
           publishedAssignments={publishedAssignments}
           publishedStaff={publishedStaff}
-          renderedDateRangeLabel={renderedDateRangeLabel}
-          targetPeriodLabel={targetPeriodLabel}
+          publishedShiftDates={publishedShiftDates}
+          publishedShiftDegreeLabel={publishedShiftDegreeLabel}
+          publishedShiftPeriodLabel={publishedShiftPeriodLabel}
           requestSaveMessage={requestSaveMessage}
           requestSaveStatus={requestSaveStatus}
           requests={requests}
           setActiveStaffId={setActiveStaffId}
           staff={staff}
-          targetMonth={targetMonth}
+          staffRequestDateRangeLabel={staffRequestDateRangeLabel}
+          staffRequestDates={staffRequestDates}
+          staffRequestDegreeLabel={staffRequestDegreeLabel}
+          staffRequestMonth={staffRequestMonth}
+          staffRequestPeriodLabel={staffRequestPeriodLabel}
           toggleRequest={toggleRequest}
           updateMemo={updateMemo}
         />
@@ -1505,17 +1531,21 @@ function StaffView({
   canSwitchStaff,
   isPublishedShiftLoading,
   isShiftPublished,
-  monthDates,
   publishedAssignments,
+  publishedShiftDates,
+  publishedShiftDegreeLabel,
+  publishedShiftPeriodLabel,
   publishedStaff,
-  renderedDateRangeLabel,
-  targetPeriodLabel,
   requestSaveMessage,
   requestSaveStatus,
   requests,
   setActiveStaffId,
   staff,
-  targetMonth,
+  staffRequestDateRangeLabel,
+  staffRequestDates,
+  staffRequestDegreeLabel,
+  staffRequestMonth,
+  staffRequestPeriodLabel,
   toggleRequest,
   updateMemo,
 }: {
@@ -1524,22 +1554,26 @@ function StaffView({
   canSwitchStaff: boolean;
   isPublishedShiftLoading: boolean;
   isShiftPublished: boolean;
-  monthDates: Date[];
   publishedAssignments: ShiftAssignment;
+  publishedShiftDates: Date[];
+  publishedShiftDegreeLabel: string;
+  publishedShiftPeriodLabel: string;
   publishedStaff: PublishedShiftStaff[];
-  renderedDateRangeLabel: string;
-  targetPeriodLabel: string;
   requestSaveMessage: string;
   requestSaveStatus: RequestSaveStatus;
   requests: TimeOffRequest[];
   setActiveStaffId: (id: string) => void;
   staff: Staff[];
-  targetMonth: string;
+  staffRequestDateRangeLabel: string;
+  staffRequestDates: Date[];
+  staffRequestDegreeLabel: string;
+  staffRequestMonth: string;
+  staffRequestPeriodLabel: string;
   toggleRequest: (dateKey: string) => void;
   updateMemo: (dateKey: string, memo: string) => void;
 }) {
   const ownRequests = requests.filter(
-    (request) => request.staffId === activeStaff?.id && isDateInShiftPeriod(request.date, targetMonth),
+    (request) => request.staffId === activeStaff?.id && isDateInShiftPeriod(request.date, staffRequestMonth),
   );
   const visibleAssignments = canSwitchStaff ? assignments : publishedAssignments;
   const visibleStaff = canSwitchStaff ? staff : publishedStaff;
@@ -1580,10 +1614,11 @@ function StaffView({
 
       <div className="space-y-4">
         <CalendarGrid
-          assignments={isShiftPublished ? visibleAssignments : {}}
-          monthDates={monthDates}
-          renderedDateRangeLabel={renderedDateRangeLabel}
-          targetPeriodLabel={targetPeriodLabel}
+          assignments={canSwitchStaff && isShiftPublished ? visibleAssignments : {}}
+          monthDates={staffRequestDates}
+          monthDegreeLabel={staffRequestDegreeLabel}
+          renderedDateRangeLabel={staffRequestDateRangeLabel}
+          targetPeriodLabel={staffRequestPeriodLabel}
           requests={ownRequests}
           staff={staff}
           activeStaffId={activeStaff?.id}
@@ -1596,9 +1631,10 @@ function StaffView({
           assignments={visibleAssignments}
           isLoading={isPublishedShiftLoading}
           isPublished={isShiftPublished}
-          monthDates={monthDates}
+          monthDates={publishedShiftDates}
+          monthDegreeLabel={publishedShiftDegreeLabel}
           staff={visibleStaff}
-          targetPeriodLabel={targetPeriodLabel}
+          targetPeriodLabel={publishedShiftPeriodLabel}
         />
       </div>
     </section>
@@ -1610,6 +1646,7 @@ function PublishedShiftTable({
   isLoading,
   isPublished,
   monthDates,
+  monthDegreeLabel,
   staff,
   targetPeriodLabel,
 }: {
@@ -1617,13 +1654,14 @@ function PublishedShiftTable({
   isLoading: boolean;
   isPublished: boolean;
   monthDates: Date[];
+  monthDegreeLabel: string;
   staff: PublishedShiftStaff[];
   targetPeriodLabel: string;
 }) {
   if (isLoading) {
     return (
       <section className="rounded-lg border border-neutral-200 bg-white p-4">
-        <h2 className="text-lg font-semibold">公開シフト</h2>
+        <h2 className="text-lg font-semibold">公開シフト：{monthDegreeLabel}</h2>
         <p className="mt-2 text-sm text-neutral-600">公開状況を確認しています...</p>
       </section>
     );
@@ -1632,7 +1670,7 @@ function PublishedShiftTable({
   if (!isPublished) {
     return (
       <section className="rounded-lg border border-neutral-200 bg-white p-4">
-        <h2 className="text-lg font-semibold">公開シフト</h2>
+        <h2 className="text-lg font-semibold">公開シフト：{monthDegreeLabel}</h2>
         <p className="mt-2 text-sm text-neutral-600">この月度のシフトはまだ公開されていません。</p>
       </section>
     );
@@ -1640,7 +1678,7 @@ function PublishedShiftTable({
 
   return (
     <section className="rounded-lg border border-neutral-200 bg-white p-4">
-      <h2 className="text-lg font-semibold">公開シフト</h2>
+      <h2 className="text-lg font-semibold">公開シフト：{monthDegreeLabel}</h2>
       <p className="mt-1 text-sm font-medium text-neutral-700">対象期間：{targetPeriodLabel}</p>
       <div className="mt-3 overflow-x-auto">
         <table className="min-w-max border-collapse text-center text-xs">
@@ -1707,6 +1745,7 @@ function CalendarGrid({
   activeStaffId,
   assignments,
   monthDates,
+  monthDegreeLabel,
   renderedDateRangeLabel,
   targetPeriodLabel,
   onDayClick,
@@ -1718,6 +1757,7 @@ function CalendarGrid({
   activeStaffId?: string;
   assignments: ShiftAssignment;
   monthDates: Date[];
+  monthDegreeLabel: string;
   renderedDateRangeLabel: string;
   targetPeriodLabel: string;
   requests: TimeOffRequest[];
@@ -1732,7 +1772,7 @@ function CalendarGrid({
       <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
           <CalendarDays size={20} />
-          <h2 className="text-lg font-semibold">希望休カレンダー</h2>
+          <h2 className="text-lg font-semibold">希望休提出：{monthDegreeLabel}</h2>
         </div>
         <div
           className={classNames(

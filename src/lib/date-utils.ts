@@ -15,6 +15,16 @@ export function getDefaultTargetMonth(date: Date) {
   return monthKey(addMonths(date, 1));
 }
 
+export function getCurrentShiftMonth(date: Date) {
+  return monthKey(date.getDate() >= 21 ? addMonths(date, 1) : date);
+}
+
+export function getNextRequestShiftMonth(date: Date) {
+  const currentShiftMonth = getCurrentShiftMonth(date);
+  const [year, month] = currentShiftMonth.split("-").map(Number);
+  return monthKey(addMonths(new Date(year, month - 1, 1), 1));
+}
+
 export function getShiftPeriodRange(targetMonth: string) {
   const [year, month] = targetMonth.split("-").map(Number);
   return {
