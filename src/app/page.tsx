@@ -642,6 +642,7 @@ export default function Home() {
       workdays: [1, 2, 3, 4, 5] as Weekday[],
       weeklyDays: 3,
       monthlyMax: 14,
+      avoidThreeConsecutive: false,
     };
     setStaff((current) => [...current, member]);
     setActiveStaffId(id);
@@ -2153,6 +2154,16 @@ function StaffManager({
               >
                 パスワード再設定
               </button>
+            </div>
+            <div className="flex flex-wrap gap-2 lg:col-span-5">
+              <label className="inline-flex min-h-10 items-center gap-2 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm font-medium">
+                <input
+                  checked={member.avoidThreeConsecutive}
+                  onChange={(event) => updateStaff(member.id, { avoidThreeConsecutive: event.target.checked })}
+                  type="checkbox"
+                />
+                3連勤をできるだけ避ける
+              </label>
             </div>
             <div className="flex flex-wrap gap-2 lg:col-span-5">
               {weekdays.map((weekday) => (

@@ -12,7 +12,7 @@ function jsonError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
-const staffSelect = "id,auth_user_id,email,sort_order,name,note,workdays,min_days,max_days,weekly_days,monthly_max";
+const staffSelect = "id,auth_user_id,email,sort_order,name,note,workdays,min_days,max_days,weekly_days,monthly_max,avoid_three_consecutive";
 
 async function findUserByEmail(adminClient: SupabaseClient, email: string) {
   const { data, error } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 1000 });
@@ -123,6 +123,7 @@ export async function POST(request: Request) {
             max_days: 14,
             weekly_days: 3,
             monthly_max: 14,
+            avoid_three_consecutive: false,
           })
           .select(staffSelect)
           .single();
@@ -141,6 +142,7 @@ export async function POST(request: Request) {
         workdays: staff.workdays,
         weeklyDays: staff.min_days ?? staff.weekly_days,
         monthlyMax: staff.max_days ?? staff.monthly_max,
+        avoidThreeConsecutive: staff.avoid_three_consecutive,
       },
     });
   } catch (error) {

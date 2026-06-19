@@ -27,9 +27,11 @@ export function generateShift(
   const staffOrder = new Map(staff.map((member, index) => [member.id, index]));
   const assignments: Record<string, string[]> = {};
   const shiftDays: ShiftDay[] = [];
+  const dateKeys: string[] = [];
 
   getMonthDates(targetMonth).forEach((date, order) => {
     const dateKey = toDateKey(date);
+    dateKeys.push(dateKey);
     assignments[dateKey] = [];
     if (isClosedDay(date)) {
       return;
@@ -57,6 +59,21 @@ export function generateShift(
         !requestSet.has(requestKey(member.id, day.dateKey))
       );
     });
+  }
+
+  function createsThreeConsecutiveDays(member: Staff, day: ShiftDay) {
+    if (!member.avoidThreeConsecutive) return false;
+
+    const worksOn = (order: number) => {
+      const dateKey = dateKeys[order];
+      return dateKey ? assignments[dateKey].includes(member.id) : false;
+    };
+
+    return (
+      (worksOn(day.order - 2) && worksOn(day.order - 1)) ||
+      (worksOn(day.order - 1) && worksOn(day.order + 1)) ||
+      (worksOn(day.order + 1) && worksOn(day.order + 2))
+    );
   }
 
   while (true) {
@@ -87,10 +104,13 @@ export function generateShift(
       const rightWeek = weekCounts.get(right.id)?.get(selectedDay.day.week) ?? 0;
       const leftSameWeekday = weekdayCounts.get(left.id)?.get(selectedDay.day.weekday) ?? 0;
       const rightSameWeekday = weekdayCounts.get(right.id)?.get(selectedDay.day.weekday) ?? 0;
+      const leftThreeConsecutivePenalty = createsThreeConsecutiveDays(left, selectedDay.day) ? 1 : 0;
+      const rightThreeConsecutivePenalty = createsThreeConsecutiveDays(right, selectedDay.day) ? 1 : 0;
       const rotationStart = (selectedDay.day.order + currentDayCount) % Math.max(staff.length, 1);
       const leftRotation = ((staffOrder.get(left.id) ?? 0) - rotationStart + staff.length) % Math.max(staff.length, 1);
       const rightRotation = ((staffOrder.get(right.id) ?? 0) - rotationStart + staff.length) % Math.max(staff.length, 1);
       return (
+        leftThreeConsecutivePenalty - rightThreeConsecutivePenalty ||
         leftMonth - rightMonth ||
         leftWeek - rightWeek ||
         leftSameWeekday - rightSameWeekday ||

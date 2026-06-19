@@ -10,6 +10,7 @@ create table if not exists public.staff (
   max_days int not null default 22,
   weekly_days int not null default 5,
   monthly_max int not null default 22,
+  avoid_three_consecutive boolean not null default false,
   created_at timestamptz not null default now()
 );
 
@@ -48,6 +49,9 @@ alter table public.staff
 
 alter table public.staff
   add column if not exists monthly_max int not null default 22;
+
+alter table public.staff
+  add column if not exists avoid_three_consecutive boolean not null default false;
 
 create unique index if not exists staff_email_unique_idx
 on public.staff (lower(email))

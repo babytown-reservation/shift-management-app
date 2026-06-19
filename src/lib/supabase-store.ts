@@ -14,6 +14,7 @@ type StaffRow = {
   max_days: number | null;
   weekly_days: number;
   monthly_max: number;
+  avoid_three_consecutive: boolean;
 };
 
 type TimeOffRow = {
@@ -62,6 +63,7 @@ function toStaff(row: StaffRow): Staff {
     workdays: row.workdays as Weekday[],
     weeklyDays: row.min_days ?? row.weekly_days,
     monthlyMax: row.max_days ?? row.monthly_max,
+    avoidThreeConsecutive: row.avoid_three_consecutive,
   };
 }
 
@@ -78,6 +80,7 @@ function fromStaff(staff: Staff) {
     max_days: staff.monthlyMax,
     weekly_days: staff.weeklyDays,
     monthly_max: staff.monthlyMax,
+    avoid_three_consecutive: staff.avoidThreeConsecutive,
   };
 }
 
@@ -116,7 +119,7 @@ function toShiftStatus(row: ShiftPeriodRow | null): ShiftPeriodStatus {
 
 export async function loadSupabaseStore(client: SupabaseClient, targetMonth: string, scope: LoadScope): Promise<SupabaseStore> {
   const { start, end } = monthRange(targetMonth);
-  const staffSelect = "id,auth_user_id,email,sort_order,name,note,workdays,min_days,max_days,weekly_days,monthly_max";
+  const staffSelect = "id,auth_user_id,email,sort_order,name,note,workdays,min_days,max_days,weekly_days,monthly_max,avoid_three_consecutive";
 
   if (scope.role === "staff") {
     const staffResult = await client
@@ -237,6 +240,7 @@ export async function upsertStaff(client: SupabaseClient, staff: Staff, includeS
           max_days: payload.max_days,
           weekly_days: payload.weekly_days,
           monthly_max: payload.monthly_max,
+          avoid_three_consecutive: payload.avoid_three_consecutive,
         })
         .eq("id", staff.id);
   const { error, count } = result;

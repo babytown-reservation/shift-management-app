@@ -10,6 +10,7 @@ export type Staff = {
   workdays: Weekday[];
   weeklyDays: number;
   monthlyMax: number;
+  avoidThreeConsecutive: boolean;
 };
 
 export type TimeOffRequest = {
